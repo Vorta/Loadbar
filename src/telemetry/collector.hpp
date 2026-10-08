@@ -53,6 +53,11 @@ class GpuSamples {
     [[nodiscard]] std::size_t cached_names() const noexcept {
         return identities_.size();
     }
+    void deactivate();
+    [[nodiscard]] Metric aggregate(std::uint64_t luid, std::wstring_view type,
+                                   Clock::time_point now) {
+        return aggregation_.aggregate(samples_, luid, type, now);
+    }
 
   private:
     struct Entry {
@@ -61,6 +66,8 @@ class GpuSamples {
     };
     std::map<std::wstring, Entry, std::less<>> identities_;
     std::vector<EngineSample> samples_;
+    EngineAggregation aggregation_;
+    friend struct CollectorDiscoveryTests;
 };
 class CounterSource {
   public:
@@ -68,6 +75,7 @@ class CounterSource {
     // Borrowed until the next sample/reset of this source; callers copy readings into snapshots.
     Result<std::span<const std::vector<CounterItem>>> sample(Clock::time_point now);
     void reset();
+    void deactivate();
 
   private:
     friend struct CollectorDiscoveryTests;

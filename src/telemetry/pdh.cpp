@@ -68,6 +68,12 @@ void PdhQuery::reset() noexcept {
     previous_ = {};
     now_ = {};
 }
+void PdhQuery::deactivate() noexcept {
+    reset();
+    std::vector<PDH_HCOUNTER>{}.swap(counters_);
+    std::vector<CounterInstances>{}.swap(previous_instances_);
+    std::vector<std::byte>{}.swap(buffer_);
+}
 Result<void> PdhQuery::open(const std::vector<std::wstring> &paths) {
     reset();
     auto code = PdhOpenQueryW(nullptr, 0, &query_);

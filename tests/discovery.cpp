@@ -190,12 +190,22 @@ struct CollectorDiscoveryTests {
                     presented_metric(snapshot.disks[0].read).timestamp == first,
                 "Hidden disk ignores shared array values while preserving original observation and "
                 "peak");
+        collector.disk_io_.arrays_.resize(2);
+        collector.disk_io_.arrays_[0].resize(100);
+        collector.disk_io_.query_.buffer_.resize(4096);
+        collector.disk_idle_.arrays_.resize(1);
+        collector.disk_idle_.query_.buffer_.resize(4096);
         hide_disk(settings.hidden_disks, L"b");
         collector.configure(settings, false);
         require(collector.disk_io_.retry_ == Clock::time_point{} &&
                     collector.disk_idle_.retry_ == Clock::time_point{} &&
                     collector.cpu_.retry_ == sentinel && collector.gpu_engines_.retry_ == sentinel,
                 "Hiding every disk resets only disk queries");
+        require(collector.disk_io_.arrays_.capacity() == 0 &&
+                    collector.disk_io_.query_.buffer_.capacity() == 0 &&
+                    collector.disk_idle_.arrays_.capacity() == 0 &&
+                    collector.disk_idle_.query_.buffer_.capacity() == 0,
+                "All-hidden disks release raw and copied provider buffers");
         now += 1s;
         sample();
         collector.disk(snapshot, now);
@@ -303,8 +313,31 @@ struct CollectorDiscoveryTests {
               &collector.gpu_memory_, &collector.gpu_shared_}) {
             source->retry_ = sentinel;
         }
+        const std::vector<CounterItem> gpu_rows{
+            {L"pid_1_luid_0x00000000_0x0000000A_phys_0_eng_0_engtype_3D",
+             {50, Status::valid, Unit::percent, now, 1s, {}}}};
+        collector.gpu_samples_.read(gpu_rows, 10);
+        require(collector.gpu_samples_.aggregate(10, L"3D", now).value == 50,
+                "GPU scratch fixture establishes valid data");
+        for (auto *source :
+             {&collector.gpu_engines_, &collector.gpu_memory_, &collector.gpu_shared_}) {
+            source->arrays_.push_back(gpu_rows);
+            source->query_.buffer_.resize(4096);
+            source->reset();
+            require(!source->arrays_.empty() && source->query_.buffer_.capacity() >= 4096,
+                    "Ordinary reset keeps reusable allocations");
+        }
         settings.gpu_visible = false;
         collector.configure(settings, false);
+        for (auto *source :
+             {&collector.gpu_engines_, &collector.gpu_memory_, &collector.gpu_shared_}) {
+            require(source->arrays_.capacity() == 0 && source->query_.buffer_.capacity() == 0,
+                    "GPU Hide releases raw and copied counter arrays");
+        }
+        require(collector.gpu_samples_.cached_names() == 0 &&
+                    collector.gpu_samples_.samples_.capacity() == 0 &&
+                    collector.gpu_samples_.aggregation_.capacity() == 0,
+                "GPU Hide releases parsed identities, sample storage and aggregation workspace");
         now += 1s;
         counters.received += 20;
         collector.network(snapshot, now);

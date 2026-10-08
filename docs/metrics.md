@@ -59,9 +59,10 @@ malformed/truncated/empty topology buffers are errors, not evidence of zero proc
 
 Presentation additionally groups cores using the topology API's EfficiencyClass. The highest
 class is the performance group; lower classes retain their class identities in details.
-Each physical core is a solid rectangle colored by the maximum sibling utilization.
-Each sibling first uses its own retained display observation, or initial warm-up zero. Only a
-never-valid unavailable/error sibling prevents a complete cell value. The tooltip lists every logical processor.
+Each logical processor has its own solid tile, colored by its own displayed utilization.
+Each thread uses its retained observation or initial warm-up zero independently; a never-valid
+unavailable/error thread affects only its own tile. Tooltips identify the physical core and
+processor group/number. Uniform four-core/eight-thread CPUs display eight equal squares.
 Unknown/uniform topology is neutral. The P/E hover summaries average logical processors within
 each group; the overall summary averages all logical processors. Incomplete observations produce
 an explicit incomplete summary when a sibling has neither a current nor retained/displayable value.
@@ -150,7 +151,11 @@ the actual positive `steady_clock` elapsed seconds, timestamped at the completed
 so variable CPU/disk collection latency cannot distort the denominator. Decreases, zero/negative ordering, disconnect,
 reselection and resume prime a new baseline. These measurements include LAN traffic. Link speeds
 are discovery metadata only, not the scale or inferred internet capacity.
-Units remain B/s, KiB/s, MiB/s and GiB/s, never mislabeled bits/s.
+API errors retry after 1, 2, 4, 8, 16 and then at most every 30 seconds, measured from the
+completed failed read. Skipped attempts preserve the native error. Success, interface changes
+and explicit recovery/reset clear backoff; the first successful connected observation primes
+a new baseline. Successfully read disconnected interfaces remain unavailable without API-error
+backoff. Units remain B/s, KiB/s, MiB/s and GiB/s, never mislabeled bits/s.
 
 ## Rate scales since launch
 

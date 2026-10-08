@@ -4,6 +4,16 @@ Independent adversarial and optimization reviews informed the implementation bef
 initial 1.0.0 commit. Findings were fixed with regression coverage; final implementation
 and release-preparation rounds each ended with two independent consecutive clean reviews.
 
+## Logical-processor/performance update
+
+Two independent consecutive adversarial/performance reviews found no actionable issues in
+this update. Reviewers checked per-thread tile identity/status and layout reordering, GPU
+scratch-reference lifetimes and aggregation semantics, Hide/deactivation ownership, glow
+bounds and DIP mapping, and network backoff/recovery. The first independently ran the Debug
+model and offscreen renderer executables and inspected the eight-thread preview; the second
+ran both Release-candidate executables. Both checked the diff. Neither launched an AppBar or
+changed user settings. These reviews do not establish production overhead or hardware accuracy.
+
 ## 1.1.0 local change review
 
 Two independent consecutive adversarial reviews found no actionable defects in the final
@@ -47,3 +57,13 @@ in [testing.md](testing.md); performance and packaging have separate evidence do
 A clean source review means no additional actionable finding in its scope. It does not prove
 live Shell behavior, hardware accuracy, production overhead or standalone compatibility.
 The README media is synthetic; no reviewer used it as hardware evidence.
+
+## CPU content-width follow-up
+
+Two independent consecutive reviews found no actionable defects in grid-sized CPU allocation
+and redistribution to equal-width non-CPU graphics. They checked narrow/wrapped/vertical
+layouts, uniform/hybrid/empty/high-count topology, hidden devices, compact-fit monotonicity,
+thickness magnification, alignment, DPI snapping and renderer hit/invalidation geometry.
+Both ran the Debug model executable successfully. Final documentation and RAM-ellipsis
+fixture adjustments were rechecked independently; all truncation assertions remain intact.
+Live AppBar appearance and production performance were not exercised.

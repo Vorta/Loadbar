@@ -7,20 +7,23 @@ provide complete readings when inline text cannot fit.
 
 ## Layout and scaling
 
-CPU and every device widget share equal graphic widths along the full negotiated edge.
-Hybrid physical-core rectangles stretch proportionally. In an 8+16 layout, one performance-core
-cell spans two efficiency cells plus their gap; compact reference heights are 14/6 DIPs.
-Efficiency classes group cores without changing metric aggregation. Uniform or unknown
-topology uses equally sized squares, left-aligned within the CPU widget. Squares use a single
+CPU width follows its logical-processor grid and effective bar thickness. RAM and the other
+visible device graphics divide the remaining row width equally along the negotiated edge.
+Each logical processor has a separate tile, ordered by class on hybrid CPUs, then physical
+core and group/number. Hybrid rectangles keep proportional class widths; a performance-class tile
+spans two efficiency-class tile widths plus their gap, with 14/6-DIP reference heights.
+Uniform or unknown efficiency classes use equally sized squares, left-aligned within the
+CPU widget. A four-core/eight-thread CPU therefore shows eight squares. Squares use a single
 row whenever they fit at the 6-DIP readable minimum, otherwise wrap with 2-DIP reference gaps.
-Their side length fits the existing CPU band; spare width does not force extra bar height.
+Their side length fits the existing CPU band. The CPU widget ends at the grid, so a small
+CPU does not leave a large empty allocation before RAM. At reference scale, hybrid P/E
+tiles prefer 22/10-DIP widths, compressing toward 14/6 DIPs on constrained edges.
 
 Drives checkboxes appear below Network and above Edge in Settings. Unchecking a drive hides
 its widget on Apply; new disks are checked automatically, and Cancel restores committed choices.
 
 GPU and Network offer **Hide** independently. Hidden widgets leave no gap or hit target;
-remaining widgets share the freed width. CPU allocation remains equal to other graphics even
-when its height-limited squares leave spare space.
+remaining device widgets share the freed width while CPU keeps its grid-sized allocation.
 
 The compact layout determines widget and CPU rows from edge length, topology, device count
 and Windows text scale. Greater bar thickness magnifies graphics, icons, hover fonts and
@@ -37,16 +40,16 @@ behavior are described in [architecture.md](architecture.md).
 
 | Graphic | Encoding |
 | --- | --- |
-| CPU | Whole rectangle uses the busiest sibling's displayed utilization; every logical processor is listed in details |
+| CPU | Each tile uses its own logical processor's displayed utilization; physical-core relationships remain in details |
 | RAM | Fixed percentage scale; hover shows coherent used/total binary GB and percentage |
 | GPU | Device violet; visual order is 3D, memory, decode, with 10/4/4-DIP reference heights |
 | Disk | Active/read/write in 10/4/4 proportions; hues `#65C55B`, `#B9DF9B`, `#36884D` |
 | Network | Fixed 14/6-DIP download/upload split |
 | Rates | Independent linear session-peak scales by device and direction |
 
-CPU heat interpolates in sRGB. A retained sibling value remains eligible for its core's color;
-initial warm-up displays zero. A never-valid unavailable/error sibling leaves the core
-incomplete. [metrics.md](metrics.md) defines the status and scope rules.
+CPU heat interpolates in sRGB. Each tile independently uses its retained observation through
+failures; initial warm-up displays zero. A never-valid unavailable/error thread affects only
+its own tile. [metrics.md](metrics.md) defines the status and scope rules.
 
 Hover overlays appear immediately; the native tooltip delay is 800 ms. Text keeps a 9-DIP
 minimum. RAM uses one line where possible, then two lines; an ellipsis indicates omitted

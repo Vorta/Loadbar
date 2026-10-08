@@ -25,5 +25,9 @@ class NetworkProvider {
     Reader reader_;
     Now now_;
     Rate download_, upload_;
+    std::optional<std::uint64_t> luid_;
+    std::optional<Error> last_error_;
+    Clock::time_point retry_{};
+    unsigned delay_{1};
 };
 } // namespace loadbar

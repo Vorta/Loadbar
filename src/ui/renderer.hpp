@@ -10,7 +10,7 @@ namespace loadbar {
 class Renderer {
   public:
     enum class ResourceKind : std::uint8_t { icon, font, glow, text };
-    // Optional dependency seam for deterministic native-resource failure/retry tests.
+    // Optional failure/retry seam: index for icons/fonts/text, pixel count for glow masks.
     using ResourceProbe = std::function<HRESULT(ResourceKind, unsigned)>;
     // Optional read-only seam for offscreen theme tests; production uses GetSysColor.
     using SystemColorReader = std::function<COLORREF(int)>;
@@ -53,7 +53,7 @@ class Renderer {
         Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
     };
     struct GlowCache {
-        float width{}, height{}, radius{}, dpi{}, content_scale{};
+        float width{}, height{}, radius{}, dpi{}, content_scale{}, extent_width{}, extent_height{};
         Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
         std::size_t bytes{};
     };

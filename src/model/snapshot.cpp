@@ -285,38 +285,61 @@ std::optional<std::pair<std::uint64_t, unsigned>> parse_adapter(std::wstring_vie
 }
 Metric aggregate_engines(const std::vector<EngineSample> &samples, std::uint64_t luid,
                          std::wstring_view type, Clock::time_point now) {
-    std::map<std::pair<unsigned, unsigned>, double> totals;
-    std::set<EngineId> seen;
-    std::optional<std::chrono::duration<double>> interval;
-    for (const auto &sample : samples) {
-        if (sample.id.luid != luid || sample.id.type != type) {
-            continue;
+    EngineAggregation scratch;
+    return scratch.aggregate(samples, luid, type, now);
+}
+void EngineAggregation::release() noexcept {
+    std::vector<const EngineSample *>{}.swap(selected_);
+}
+Metric EngineAggregation::aggregate(const std::vector<EngineSample> &samples, std::uint64_t luid,
+                                    std::wstring_view type, Clock::time_point now) {
+    struct ClearReferences {
+        std::vector<const EngineSample *> &selected;
+        ~ClearReferences() {
+            selected.clear();
         }
-        if (!seen.insert(sample.id).second) {
+    } clear{selected_};
+    for (const auto &sample : samples) {
+        if (sample.id.luid == luid && sample.id.type == type) {
+            selected_.push_back(&sample);
+        }
+    }
+    if (selected_.empty()) {
+        return {0, Status::unavailable, Unit::percent, now, {}, L"No valid engine observations"};
+    }
+    const auto key = [](const EngineSample *sample) {
+        return std::tuple{sample->id.physical, sample->id.engine, sample->id.process};
+    };
+    std::ranges::sort(selected_, {}, key);
+    std::optional<std::chrono::duration<double>> interval;
+    const EngineSample *previous{};
+    double total{}, busiest{};
+    for (const auto *sample : selected_) {
+        if (previous && key(previous) == key(sample)) {
             return {
                 0, Status::error, Unit::percent, now, {}, L"Duplicate GPU process/engine instance"};
         }
-        if (sample.metric.status != Status::valid) {
-            return sample.metric;
+        const auto &metric = sample->metric;
+        if (metric.status != Status::valid) {
+            return metric;
         }
-        if (!std::isfinite(sample.metric.value) || sample.metric.value < 0 ||
-            sample.metric.timestamp != now || (interval && *interval != sample.metric.interval)) {
+        if (!std::isfinite(metric.value) || metric.value < 0 || metric.timestamp != now ||
+            (interval && *interval != metric.interval)) {
             return {0, Status::error, Unit::percent, now, {}, L"Invalid GPU value/interval"};
         }
-        interval = sample.metric.interval;
-        totals[{sample.id.physical, sample.id.engine}] += sample.metric.value;
-    }
-    if (totals.empty()) {
-        return {0, Status::unavailable, Unit::percent, now, {}, L"No valid engine observations"};
-    }
-    double busiest{};
-    for (const auto &[key, value] : totals) {
-        (void)key;
-        if (!std::isfinite(value)) {
+        interval = metric.interval;
+        if (previous && (previous->id.physical != sample->id.physical ||
+                         previous->id.engine != sample->id.engine)) {
+            busiest = std::max(busiest, total);
+            total = 0;
+        }
+        total += metric.value;
+        if (!std::isfinite(total)) {
             return {0, Status::error, Unit::percent, now, {}, L"GPU sum overflow"};
         }
-        busiest = std::max(busiest, value);
+        previous = sample;
     }
+    busiest = std::max(busiest, total);
     return {busiest,
             Status::valid,
             Unit::percent,

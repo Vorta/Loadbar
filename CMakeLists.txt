@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 4.2)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX "${CMAKE_CURRENT_SOURCE_DIR}/cmake/msvc_standard.cmake")
-project(Loadbar VERSION 1.1.0 LANGUAGES CXX RC)
+project(Loadbar VERSION 1.1.1 LANGUAGES CXX RC)
 configure_file(resources/loadbar_version.h.in generated/loadbar_version.h @ONLY)
 
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)

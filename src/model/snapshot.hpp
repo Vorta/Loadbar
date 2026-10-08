@@ -141,6 +141,19 @@ struct EngineSample {
 parse_adapter(std::wstring_view name);
 [[nodiscard]] Metric aggregate_engines(const std::vector<EngineSample> &samples, std::uint64_t luid,
                                        std::wstring_view type, Clock::time_point now);
+// Worker-owned scratch: no owning engine/string copies and no borrowed samples after a call.
+class EngineAggregation {
+  public:
+    [[nodiscard]] Metric aggregate(const std::vector<EngineSample> &samples, std::uint64_t luid,
+                                   std::wstring_view type, Clock::time_point now);
+    void release() noexcept;
+    [[nodiscard]] std::size_t capacity() const noexcept {
+        return selected_.capacity();
+    }
+
+  private:
+    std::vector<const EngineSample *> selected_;
+};
 
 // Notification generation and slot mutation share the same mutex. The UI closes publication
 // before destroying its HWND; the worker never retains a naked notification target.

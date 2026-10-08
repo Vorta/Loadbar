@@ -134,6 +134,116 @@ void uniform_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *fact
     }
 }
 
+void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                                    const std::filesystem::path &directory) {
+    using namespace loadbar;
+    auto snapshot = fixture();
+    snapshot.processors.resize(8);
+    for (unsigned i = 0; i < 8; ++i) {
+        snapshot.processors[i].core = i / 2;
+        snapshot.processors[i].efficiency_class = 0;
+        snapshot.processors[i].utilization.value = static_cast<double>(i) * 100 / 7;
+    }
+    for (bool horizontal : {true, false}) {
+        const UINT width = horizontal ? 1400U : 140U, height = horizontal ? 60U : 1000U;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        Renderer renderer;
+        const auto layout = make_snapshot_layout(
+            static_cast<float>(width), static_cast<float>(height), horizontal, snapshot, 1, {});
+        require(layout.fits && layout.cores.size() == 8,
+                "Four-core/eight-thread layout has eight tiles");
+        const auto center = [&](const std::vector<BYTE> &image, std::size_t tile) {
+            const auto b = layout.cores[tile].label;
+            const auto offset = (static_cast<std::size_t>(b.y + b.height / 2) * width +
+                                 static_cast<std::size_t>(b.x + b.width / 2)) *
+                                4;
+            return std::array{image[offset], image[offset + 1], image[offset + 2]};
+        };
+        for (bool contrast : {false, true}) {
+            checked(renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false,
+                                       contrast, {}));
+            if (horizontal && !contrast) {
+                save(wic, bitmap.Get(), directory / L"uniform4-8threads-60-normal.png");
+            }
+            const auto baseline = pixels(bitmap.Get(), width, height);
+            for (std::size_t changed = 0; changed < 8; ++changed) {
+                auto update = snapshot;
+                update.processors[changed].utilization.value = changed < 4 ? 100 : 0;
+                checked(renderer.render_to(target.Get(), update, {}, horizontal, false, 1, false,
+                                           contrast, {}));
+                const auto actual = pixels(bitmap.Get(), width, height);
+                for (std::size_t tile = 0; tile < 8; ++tile) {
+                    require((center(actual, tile) != center(baseline, tile)) == (tile == changed),
+                            "Only the changed logical processor changes its own interior color");
+                }
+            }
+            DisplayContinuity continuity;
+            auto retained = snapshot;
+            continuity.observe(retained);
+            retained.processors[1].utilization.status = Status::error;
+            continuity.observe(retained);
+            checked(renderer.render_to(target.Get(), retained, {}, horizontal, false, 1, false,
+                                       contrast, {}));
+            require(pixels(bitmap.Get(), width, height) == baseline,
+                    "SMT error retention preserves both independent thread tiles");
+            auto warming = snapshot;
+            warming.processors[0].utilization.status = Status::warming_up;
+            checked(renderer.render_to(target.Get(), warming, {}, horizontal, false, 1, false,
+                                       contrast, {}));
+            require(pixels(bitmap.Get(), width, height) == baseline,
+                    "Never-observed thread warmup renders as zero without marks");
+        }
+        std::ranges::reverse(snapshot.processors);
+        const auto reordered = make_snapshot_layout(
+            static_cast<float>(width), static_cast<float>(height), horizontal, snapshot, 1, {});
+        for (std::size_t tile = 0; tile < 8; ++tile) {
+            require(reordered.cores[tile].logical == layout.cores[tile].logical,
+                    "CPU tile identity order is stable across reordered samples");
+        }
+        std::ranges::reverse(snapshot.processors);
+    }
+}
+void bounded_glow_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
+    using namespace loadbar;
+    auto snapshot = fixture();
+    for (auto &cpu : snapshot.processors) {
+        cpu.utilization.value = 95;
+    }
+    snapshot.gauges[0].value = snapshot.gauges[1].value = snapshot.gauges[3].value = 95;
+    for (bool horizontal : {true, false}) {
+        const UINT width = horizontal ? 3840U : 640U, height = horizontal ? 640U : 2160U;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        unsigned creations{}, largest{};
+        Renderer renderer([&](Renderer::ResourceKind kind, unsigned count) {
+            if (kind == Renderer::ResourceKind::glow) {
+                ++creations;
+                largest = std::max(largest, count);
+                require(count > 0 && count <= 65536, "Glow temporary images stay within 768 KiB");
+            }
+            return S_OK;
+        });
+        checked(
+            renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false, false, {}));
+        const auto cold_count = creations;
+        const auto cold = pixels(bitmap.Get(), width, height);
+        require(cold_count > 0 && largest > 32000, "Large fixture exercises bounded glow masks");
+        checked(
+            renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false, false, {}));
+        require(creations == cold_count && pixels(bitmap.Get(), width, height) == cold,
+                "Bounded glows cache without repeated construction or pixel changes");
+    }
+}
+
 void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
     using namespace loadbar;
     const auto snapshot = fixture();
@@ -162,9 +272,9 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
                         "Disk visibility retains every CPU core in both orientations");
                 std::size_t disk_blocks{};
                 for (const auto &block : layout.blocks) {
-                    require(std::abs(block.graphic.width - layout.blocks.front().graphic.width) <
-                                0.001F,
-                            "Visible widgets share graphic widths");
+                    require(block.kind == 0 || std::abs(block.graphic.width -
+                                                        layout.blocks[1].graphic.width) < 0.001F,
+                            "Non-CPU widgets share remaining graphic widths");
                     if (block.kind == 3) {
                         ++disk_blocks;
                         require(block.disk < snapshot.disks.size() &&
@@ -571,6 +681,8 @@ int wmain(int argc, wchar_t **argv) {
         std::filesystem::create_directories(directory);
         uniform_visibility_render_tests(wic.Get(), factory.Get(), directory);
         drive_visibility_render_tests(wic.Get(), factory.Get());
+        logical_processor_render_tests(wic.Get(), factory.Get(), directory);
+        bounded_glow_tests(wic.Get(), factory.Get());
         contrast_load_regression(wic.Get(), factory.Get());
         contrast_palette_tests(wic.Get(), factory.Get(), directory);
         continuity_render_tests(wic.Get(), factory.Get(), directory);
@@ -580,7 +692,7 @@ int wmain(int argc, wchar_t **argv) {
             for (unsigned variant = 0; variant < 4; ++variant) {
                 const bool horizontal = variant != 3;
                 const unsigned dip_width = variant == 0   ? 506U
-                                           : variant == 1 ? 618U
+                                           : variant == 1 ? 800U
                                            : variant == 2 ? 1274U
                                                           : 140U;
                 const unsigned dip_height = horizontal
@@ -742,7 +854,9 @@ int wmain(int argc, wchar_t **argv) {
                             bool failed = false;
                             loadbar::Renderer retry(
                                 [&](loadbar::Renderer::ResourceKind stage, unsigned index) {
-                                    if (!failed && stage == kind && index == failure_index) {
+                                    if (!failed && stage == kind &&
+                                        (kind == loadbar::Renderer::ResourceKind::glow ||
+                                         index == failure_index)) {
                                         failed = true;
                                         return E_OUTOFMEMORY;
                                     }

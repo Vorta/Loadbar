@@ -333,7 +333,7 @@ void layout_and_selection() {
     check(thickness <= 240, "200% portrait horizontal bar fits within safety maximum");
     const auto compact =
         make_layout(540, static_cast<float>(thickness), true, portrait.processors, 1);
-    check(compact.fits && compact.cores.size() == 12, "Compact horizontal grid retains every LP");
+    check(compact.fits && compact.cores.size() == 24, "Compact horizontal grid retains every LP");
     const auto &first_lane = compact.cores[0].label;
     const auto &second_lane = compact.cores[1].label;
     const auto initial_tip =
@@ -377,11 +377,12 @@ void layout_and_selection() {
             const auto layout =
                 make_layout(horizontal ? 3840.0F : 800.0F, horizontal ? 800.0F : 3840.0F,
                             horizontal, processors, scale);
-            check(layout.fits && layout.cores.size() == 72, "All processors visible at text scale");
+            check(layout.fits && layout.cores.size() == processors.size(),
+                  "All processors visible at text scale");
             std::set<std::size_t> indices;
             for (const auto &core : layout.cores) {
                 check(core.label.height >= 6 && core.label.width >= 6, "Readable core size");
-                indices.insert(core.processors.begin(), core.processors.end());
+                indices.insert(core.processor);
             }
             check(indices.size() == processors.size(), "No hidden/duplicated logical processors");
         }

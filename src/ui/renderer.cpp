@@ -319,14 +319,27 @@ void Renderer::glow(Box b, Color hue, float radius, float alpha) {
                g.content_scale == content_scale_;
     });
     if (found == glows_.end()) {
-        const float scale = dpi / 96;
-        const int pad =
-            static_cast<int>(std::round(glow_padding_dips(content_scale_, dpi) * scale));
-        const int width = static_cast<int>(std::ceil(b.width * scale)) + pad * 2,
-                  height = static_cast<int>(std::ceil(b.height * scale)) + pad * 2;
-        if (width <= 0 || height <= 0 || static_cast<std::uint64_t>(width) * height > 4000000) {
+        const double physical_scale = dpi / 96.0;
+        const double physical_pad =
+            std::round(glow_padding_dips(content_scale_, dpi) * physical_scale);
+        const double full_width = std::ceil(b.width * physical_scale) + physical_pad * 2;
+        const double full_height = std::ceil(b.height * physical_scale) + physical_pad * 2;
+        if (!std::isfinite(full_width) || !std::isfinite(full_height) || full_width <= 0 ||
+            full_height <= 0) {
             return;
         }
+        // Keep compact masks pixel-identical. Large masks use bounded resolution, mapped
+        // back to their original DIP extent; mask/temp/pixels together use at most 768 KiB.
+        const double reduction = std::min({1.0, 1024 / full_width, 1024 / full_height,
+                                           std::sqrt(65536 / (full_width * full_height))});
+        const int width = std::max(1, static_cast<int>(std::floor(full_width * reduction)));
+        const int height = std::max(1, static_cast<int>(std::floor(full_height * reduction)));
+        if (width > 1024 || height > 1024 || static_cast<std::uint64_t>(width) * height > 65536) {
+            return;
+        }
+        const float scale = static_cast<float>(physical_scale * reduction);
+        const float mask_pad = static_cast<float>(physical_pad * reduction);
+        const int pad = std::max(1, static_cast<int>(std::ceil(mask_pad)));
         const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
         // Bound cached bitmap payloads as well as entry count. Evict only as much as
         // needed; a hit moves to the back below so frequently used shapes survive.
@@ -342,10 +355,13 @@ void Renderer::glow(Box b, Color hue, float radius, float alpha) {
         }
         std::vector<float> mask(count), temp(count);
         const float rx = std::min(radius, std::min(b.width, b.height) / 2) * scale;
-        for (int y = pad; y < height - pad; ++y) {
-            for (int x = pad; x < width - pad; ++x) {
-                const float px = static_cast<float>(x - pad) + 0.5F,
-                            py = static_cast<float>(y - pad) + 0.5F;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const float px = static_cast<float>(x) - mask_pad + 0.5F,
+                            py = static_cast<float>(y) - mask_pad + 0.5F;
+                if (px < 0 || py < 0 || px >= b.width * scale || py >= b.height * scale) {
+                    continue;
+                }
                 const float cx = std::clamp(px, rx, b.width * scale - rx),
                             cy = std::clamp(py, rx, b.height * scale - rx);
                 mask[static_cast<std::size_t>(y) * width + x] =
@@ -392,9 +408,17 @@ void Renderer::glow(Box b, Color hue, float radius, float alpha) {
                     static_cast<std::uint32_t>(std::clamp(v * 255, 0.0F, 255.0F)) << 24U;
             }
         }
-        GlowCache cached{b.width, b.height, radius, dpi, content_scale_, {}, bytes};
+        GlowCache cached{b.width,
+                         b.height,
+                         radius,
+                         dpi,
+                         content_scale_,
+                         static_cast<float>(full_width / physical_scale),
+                         static_cast<float>(full_height / physical_scale),
+                         {},
+                         bytes};
         if (resource_probe_) {
-            checked(resource_probe_(ResourceKind::glow, 0));
+            checked(resource_probe_(ResourceKind::glow, static_cast<unsigned>(count)));
         }
         checked(drawing_->CreateBitmap(
             D2D1::SizeU(static_cast<UINT32>(width), static_cast<UINT32>(height)), pixels.data(),
@@ -409,13 +433,12 @@ void Renderer::glow(Box b, Color hue, float radius, float alpha) {
         std::rotate(found, std::next(found), glows_.end());
         found = std::prev(glows_.end());
     }
-    const auto size = found->bitmap->GetSize();
     const float pad = glow_padding_dips(content_scale_, dpi);
     hue.a = alpha;
     brush_->SetColor(native(hue));
     drawing_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-    const auto destination =
-        D2D1::RectF(b.x - pad, b.y - pad, b.x - pad + size.width, b.y - pad + size.height);
+    const auto destination = D2D1::RectF(b.x - pad, b.y - pad, b.x - pad + found->extent_width,
+                                         b.y - pad + found->extent_height);
     drawing_->FillOpacityMask(found->bitmap.Get(), brush_.Get(), D2D1_OPACITY_MASK_CONTENT_GRAPHICS,
                               &destination);
     drawing_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -633,7 +656,7 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             for (std::size_t index = 0; index < layout_.cores.size(); ++index) {
                 const auto &core = layout_.cores[index];
                 const auto &m = core_readings_[index];
-                // The entire physical-core cell changes color; there is no utilization bar.
+                // Each logical processor has its own solid color, with no utilization bar.
                 auto color = inactive_;
                 if (high_contrast_) {
                     // Stronger contrast means greater load on both light and dark themes.

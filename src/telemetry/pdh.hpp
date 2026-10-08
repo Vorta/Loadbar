@@ -50,9 +50,11 @@ class PdhQuery {
     Result<void> collect(Clock::time_point now);
     Result<void> array(std::size_t index, Unit unit, std::vector<CounterItem> &result);
     void reset() noexcept;
+    void deactivate() noexcept;
 
   private:
     PDH_HQUERY query_{};
+    friend struct CollectorDiscoveryTests;
     std::vector<PDH_HCOUNTER> counters_;
     std::vector<CounterInstances> previous_instances_;
     std::vector<std::byte> buffer_;

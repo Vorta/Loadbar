@@ -10,7 +10,8 @@ The 24-second loop shows normal-mode readings at a fixed 60-DIP thickness. Its s
 1400 x 60 pixels at 96 DPI, preserving native pixels with no padding or image resizing.
 Sampling is one update per second, without interpolated animation.
 It depicts one horizontal bar with a fictional hybrid CPU (eight SMT P-cores and sixteen
-single-thread E-cores, matching the infographic), RAM, GPU, two disks and one NIC.
+single-thread E-cores), RAM, GPU, two disks and one NIC. Version 1.1.1 renders all 32
+logical processors separately. The infographic is a schematic guide, not an exact layout.
 The same session-peak model used by the application processes the synthetic rates.
 
 The supplied docs/media/loadbar-infographic.svg is embedded in the README's widget
@@ -40,3 +41,8 @@ No library is downloaded by these scripts. Check Pillow's version before reprodu
 asset; any installation is an explicit developer action. No fonts are loaded by the encoding
 script. Output frames/build files stay under out/;
 only the finished GIF and still preview are checked in.
+
+For 1.1.1, the optional fixture was rebuilt and rendered with the current production code.
+Pillow 12.2.0 validated the regenerated GIF as 24 frames at 1400 × 60 pixels, one second
+per frame. The matching still was visually checked. Infographic CPU wording was updated
+to threads; its PNG was regenerated from the SVG with headless Edge at 1400 × 614.

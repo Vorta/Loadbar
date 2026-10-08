@@ -133,6 +133,11 @@ const std::vector<EngineSample> &GpuSamples::read(const std::vector<CounterItem>
     std::erase_if(identities_, [](const auto &entry) { return !entry.second.seen; });
     return samples_;
 }
+void GpuSamples::deactivate() {
+    identities_.clear();
+    std::vector<EngineSample>{}.swap(samples_);
+    aggregation_.release();
+}
 CounterSource::CounterSource(std::vector<std::wstring> paths, Unit unit)
     : paths_(std::move(paths)), unit_(unit) {}
 void CounterSource::reset() {
@@ -140,6 +145,12 @@ void CounterSource::reset() {
     open_ = false;
     retry_ = {};
     delay_ = 1;
+}
+void CounterSource::deactivate() {
+    reset();
+    query_.deactivate();
+    std::vector<std::vector<CounterItem>>{}.swap(arrays_);
+    last_error_ = {};
 }
 Result<std::span<const std::vector<CounterItem>>> CounterSource::sample(Clock::time_point now) {
     if (now < retry_) {
@@ -232,6 +243,16 @@ void Collector::configure(const Settings &settings, bool reset, bool reset_gpu,
         gpu_engines_.reset();
         gpu_memory_.reset();
         gpu_shared_.reset();
+    }
+    if (!disk_sampling) {
+        disk_io_.deactivate();
+        disk_idle_.deactivate();
+    }
+    if (!settings.gpu_visible) {
+        gpu_engines_.deactivate();
+        gpu_memory_.deactivate();
+        gpu_shared_.deactivate();
+        gpu_samples_.deactivate();
     }
     hidden_disks_ = settings.hidden_disks;
     disk_sampling_ = disk_sampling;
@@ -403,11 +424,10 @@ void collect_gpu_impl(Snapshot &snapshot, const Device &device, Clock::time_poin
         };
         const auto values = read(read_engines);
         if (values) {
-            const auto &samples = cache.read((*values)[0], device.runtime_id);
-            gauge(snapshot, Gauge::gpu_3d) =
-                aggregate_engines(samples, device.runtime_id, L"3D", now);
+            cache.read((*values)[0], device.runtime_id);
+            gauge(snapshot, Gauge::gpu_3d) = cache.aggregate(device.runtime_id, L"3D", now);
             gauge(snapshot, Gauge::gpu_decode) =
-                aggregate_engines(samples, device.runtime_id, L"VideoDecode", now);
+                cache.aggregate(device.runtime_id, L"VideoDecode", now);
         } else {
             gauge(snapshot, Gauge::gpu_3d) = failed(now, Unit::percent, values.error());
             gauge(snapshot, Gauge::gpu_decode) = gauge(snapshot, Gauge::gpu_3d);

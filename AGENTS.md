@@ -223,9 +223,10 @@ excluding global and group `_Total` instances. Map topology with
 Handle heterogeneous cores, SMT, and more than 64 logical processors without a fixed
 thread-per-core assumption or a single global affinity mask. [CPU topology][cpu]
 
-Show deterministically ordered physical-core rectangles, fully colored by the busiest logical
-processor in each core; do not draw partial fill bars inside them. Retain every logical
-processor reading in tooltips and accessible details. When mapping is unreliable, label logical
+Show one solid tile per logical processor, independently colored by that processor's utilization;
+do not draw partial fill bars inside tiles. Order tiles by efficiency class on hybrid CPUs,
+then physical core and processor group/number, keeping siblings adjacent. Retain physical-core
+relationships in tooltips and accessible details. When mapping is unreliable, label logical
 processors honestly. Do not sum
 sibling percentages into physical-core capacity or silently substitute `% Processor
 Utility`. Validate against the same source/interval, not Task Manager's aggregate number.
@@ -288,17 +289,18 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
 
 ## Visualization and execution model
 
-- Make solid core rectangles the CPU visualization: more utilization means stronger color.
-  Keep equal allocated graphic widths for CPU and visible devices; hybrid cores stretch
-  proportionally. Uniform or unknown efficiency classes use equally sized squares side by side,
+- Make solid logical-processor tiles the CPU visualization: more utilization means stronger color.
+  Size the CPU widget to its logical-processor tile grid and bar thickness; divide remaining
+  row width equally among visible non-CPU device graphics. Hybrid tiles retain proportional
+  class widths. Uniform or unknown efficiency classes use equally sized squares side by side,
   wrapping only when needed at a 6-DIP minimum with 2-DIP reference gaps. Fit squares within the
-  existing CPU band, allowing spare width rather than increasing bar height to fill it.
+  existing CPU band without reserving unused width after the grid.
   Keep RAM, both GPU engines, GPU memory, disk directions, and network
   directions identifiable. Use labels/direction cues as well as color.
 - Increasing effective bar thickness scales graphics, icons, hover text and internal spacing
   together, within the available space. Preserve widget and CPU rows from the compact readable
   baseline and cap enlargement when they no longer fit; reflow for changes to edge length,
-  orientation, topology, devices or Windows text scale. Keep equal graphic widths and separate
+  orientation, topology, devices or Windows text scale. Keep equal non-CPU graphic widths and separate
   automatic magnification from DPI/text scaling. Native controls retain Windows sizing.
 - Numbers appear on hover only. GPU uses Device violet; network keeps the 2:1 (14/6-DIP
   reference) split. Disk hues are active `#65C55B`, read `#B9DF9B`, write `#36884D`, with

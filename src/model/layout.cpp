@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
-#include <map>
 #include <set>
 namespace loadbar {
 namespace {
@@ -17,7 +16,7 @@ float alignment_offset(float free, Alignment a) {
 }
 struct Core {
     unsigned key{};
-    std::vector<std::size_t> members;
+    std::size_t processor{};
     std::optional<unsigned> efficiency;
 };
 struct GridCell {
@@ -26,49 +25,47 @@ struct GridCell {
 };
 struct CpuGrid {
     std::vector<GridCell> cells;
-    float band{22}, minimum_width{48};
+    float band{22}, minimum_width{48}, preferred_width{48};
     bool uniform{};
 };
 CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
     CpuGrid result;
-    std::map<unsigned, Core> grouped;
+    std::vector<Core> cores;
+    cores.reserve(processors.size());
     std::set<unsigned> classes;
     for (std::size_t i = 0; i < processors.size(); ++i) {
-        auto &c = grouped[processors[i].core];
-        c.key = processors[i].core;
-        c.members.push_back(i);
-        c.efficiency = processors[i].efficiency_class;
+        const auto &c = cores.emplace_back(processors[i].core, i, processors[i].efficiency_class);
         if (c.efficiency) {
             classes.insert(*c.efficiency);
         }
     }
-    std::vector<Core> cores;
-    for (auto &[key, core] : grouped) {
-        (void)key;
-        cores.push_back(std::move(core));
-    }
     const bool hybrid = classes.size() > 1;
-    if (hybrid) {
-        std::ranges::stable_sort(
-            cores, [](const Core &a, const Core &b) { return a.efficiency > b.efficiency; });
-    }
+    std::ranges::sort(cores, [&](const Core &a, const Core &b) {
+        if (hybrid && a.efficiency != b.efficiency) {
+            return a.efficiency > b.efficiency;
+        }
+        return a.key != b.key ? a.key < b.key
+                              : processors[a.processor].id < processors[b.processor].id;
+    });
     if (!hybrid) {
         result.uniform = true;
         const int columns = std::max(
             1, std::min(static_cast<int>(cores.size()), static_cast<int>((width + 2) / 8)));
         const int rows = (static_cast<int>(cores.size()) + columns - 1) / columns;
         result.band = std::max(22.0F, static_cast<float>(rows) * 8 - 2);
-        result.minimum_width = std::max(48.0F, static_cast<float>(columns) * 8 - 2);
+        result.minimum_width = cores.empty() ? 48.0F : static_cast<float>(columns) * 8 - 2;
         const float side = std::min((width + 2) / static_cast<float>(columns) - 2,
                                     (result.band + 2) / static_cast<float>(std::max(1, rows)) - 2);
+        result.preferred_width =
+            cores.empty() ? 48.0F : static_cast<float>(columns) * (side + 2) - 2;
         for (std::size_t i = 0; i < cores.size(); ++i) {
             const auto &core = cores[i];
             const auto row = static_cast<int>(i) / columns;
             result.cells.push_back({{{0, static_cast<float>(row) * (side + 2), side, side},
                                      core.key,
-                                     processors[core.members.front()].mapped,
-                                     processors[core.members.front()].id,
-                                     core.members},
+                                     processors[core.processor].mapped,
+                                     processors[core.processor].id,
+                                     core.processor},
                                     static_cast<int>(i) % columns,
                                     columns});
         }
@@ -79,7 +76,10 @@ CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
         cores, [&](const Core &c) { return c.efficiency && *c.efficiency == highest; });
     const int columns =
         std::max(1, std::min(static_cast<int>(p_count), static_cast<int>((width + 2) / 16.0F)));
-    result.minimum_width = std::max(48.0F, static_cast<float>(columns) * 16.0F - 2);
+    result.minimum_width = static_cast<float>(columns) * 16.0F - 2;
+    // Preserve the 2:1 class width relationship without stretching a small CPU over
+    // a device-sized allocation. At the reference scale P/E tiles are 22/10 DIPs wide.
+    result.preferred_width = std::min(width, static_cast<float>(columns) * 24 - 2);
     int column{};
     float y{}, row_height{};
     std::optional<unsigned> previous;
@@ -94,9 +94,9 @@ CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
         }
         result.cells.push_back({{{0, y, 0, ch},
                                  core.key,
-                                 processors[core.members.front()].mapped,
-                                 processors[core.members.front()].id,
-                                 core.members},
+                                 processors[core.processor].mapped,
+                                 processors[core.processor].id,
+                                 core.processor},
                                 column,
                                 cols});
         row_height = std::max(row_height, ch);
@@ -168,16 +168,24 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
     for (int cols = horizontal ? count : 1; cols >= 1; --cols) {
         const float overhead =
             22 + static_cast<float>(cols - 1) * 12 + (cols == count ? 13.0F : 0.0F);
-        const float g = (w - overhead) / static_cast<float>(cols) - 21;
-        if (g < 48) {
+        const float graphics = w - overhead - static_cast<float>(cols) * 21;
+        const float cpu_budget = graphics - static_cast<float>(cols - 1) * 48;
+        if (cpu_budget < (processors.empty() ? 48.0F : 6.0F) ||
+            (cols < count && graphics < static_cast<float>(cols) * 48)) {
             continue;
         }
-        auto cpu = cpu_grid(processors, g);
+        auto cpu = cpu_grid(processors, cpu_budget);
+        if (cpu.minimum_width > cpu_budget) {
+            continue;
+        }
         const int rows = (count + cols - 1) / cols;
         const float used_h =
             static_cast<float>(rows) * cpu.band + static_cast<float>(rows - 1) * 12 + 18;
         if (used_h <= h) {
-            const float minimum_w = overhead + static_cast<float>(cols) * (21 + cpu.minimum_width);
+            const float minimum_graphics =
+                std::max(cpu.preferred_width + static_cast<float>(cols - 1) * 48,
+                         cols < count ? static_cast<float>(cols) * 48 : 0.0F);
+            const float minimum_w = overhead + static_cast<float>(cols) * 21 + minimum_graphics;
             return LayoutPlan{std::move(cpu), cols, count, std::move(kinds), minimum_w, used_h};
         }
     }
@@ -225,11 +233,19 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     const float w = width / scale, h = height / scale;
     const int cols = plan.columns, count = plan.count;
     const bool single_row = cols == count;
-    const float g = (w - 22 - static_cast<float>(cols - 1) * 12 - (single_row ? 13.0F : 0.0F)) /
-                        static_cast<float>(cols) -
-                    21;
+    const float graphics = w - 22 - static_cast<float>(cols - 1) * 12 -
+                           (single_row ? 13.0F : 0.0F) - static_cast<float>(cols) * 21;
+    const float cpu_width =
+        std::min(plan.cpu.preferred_width, graphics - static_cast<float>(cols - 1) * 48);
+    // All device meters share the remainder. With wrapped rows, also respect the
+    // full device-only row; its free space follows the selected content alignment.
+    const float shared_width =
+        cols == 1 ? graphics : (graphics - cpu_width) / static_cast<float>(cols - 1);
+    const float g =
+        single_row ? shared_width : std::min(shared_width, graphics / static_cast<float>(cols));
     // Allow only floating-point rounding at an analytically calculated fit boundary.
-    if (g + 0.0001F < plan.cpu.minimum_width || h + 0.0001F < plan.minimum_height) {
+    if (cpu_width + 0.0001F < plan.cpu.minimum_width || g + 0.0001F < 48 ||
+        h + 0.0001F < plan.minimum_height) {
         return l;
     }
     const float band = plan.cpu.band;
@@ -243,17 +259,20 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
         b.disk = b.kind == 3 ? disk_index++ : 0;
         const int row = i / cols, col = i % cols;
         const int row_count = std::min(cols, count - row * cols);
-        const float row_free = static_cast<float>(cols - row_count) * (g + 33);
-        const float x = 11 + static_cast<float>(col) * (g + 33) +
-                        (single_row && i > 0 ? 13.0F : 0.0F) +
-                        alignment_offset(row_free, alignment);
-        place_block(b, x, top + static_cast<float>(row) * (band + 12), g, band);
+        const float row_width = static_cast<float>(row_count) * (g + 21) +
+                                static_cast<float>(row_count - 1) * 12 +
+                                (row == 0 ? cpu_width - g : 0) + (single_row ? 13.0F : 0.0F);
+        const float x =
+            11 + static_cast<float>(col) * (g + 33) + (row == 0 && col > 0 ? cpu_width - g : 0) +
+            (single_row && i > 0 ? 13.0F : 0.0F) + alignment_offset(w - 22 - row_width, alignment);
+        place_block(b, x, top + static_cast<float>(row) * (band + 12), i == 0 ? cpu_width : g,
+                    band);
     }
     l.cores.reserve(plan.cpu.cells.size());
     for (const auto &cell : plan.cpu.cells) {
         auto core = cell.core;
-        float cw =
-            (g - 2 * static_cast<float>(cell.columns - 1)) / static_cast<float>(cell.columns);
+        float cw = (cpu_width - 2 * static_cast<float>(cell.columns - 1)) /
+                   static_cast<float>(cell.columns);
         if (plan.cpu.uniform) {
             cw = std::min(cw, core.label.height);
             const float row = core.label.y / (core.label.height + 2);
@@ -264,10 +283,10 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
         core.label.width = cw;
         move(core.label, l.blocks[0].graphic.x, l.blocks[0].graphic.y);
         scale_box(core.label, scale);
-        l.cores.push_back(std::move(core));
+        l.cores.push_back(core);
     }
     if (single_row) {
-        l.divider = {l.blocks[0].bounds.x + g + 21 + 12, top + (band - 20) / 2, 1, 20};
+        l.divider = {l.blocks[0].bounds.x + cpu_width + 21 + 12, top + (band - 20) / 2, 1, 20};
     }
     for (auto &b : l.blocks) {
         scale_box(b.bounds, scale);
@@ -346,7 +365,7 @@ double minimum_thickness(float length, float maximum, bool horizontal,
     return compact ? compact->thickness : static_cast<double>(maximum) + 1;
 }
 std::wstring core_label(const CoreBox &c) {
-    return c.mapped ? std::format(L"Core {}", c.core)
+    return c.mapped ? std::format(L"Core {} · G{} LP{}", c.core, c.logical.group, c.logical.number)
                     : std::format(L"G{}:{}", c.logical.group, c.logical.number);
 }
 MetricView core_metric(const CoreBox &core, const Snapshot &snapshot, Clock::time_point now,
@@ -354,21 +373,11 @@ MetricView core_metric(const CoreBox &core, const Snapshot &snapshot, Clock::tim
     MetricView result;
     result.timestamp = now;
     result.detail = L"Core data absent";
-    for (auto index : core.processors) {
-        if (index >= snapshot.processors.size()) {
-            return result;
-        }
-        auto m =
-            presented_metric(aged_metric(snapshot.processors[index].utilization, now, interval_ms));
-        if (m.status != Status::valid) {
-            return m;
-        }
-        if (!std::isfinite(m.value) || m.value < 0) {
-            m.status = Status::error;
-            return m;
-        }
-        if (result.status != Status::valid || m.value > result.value) {
-            result = m;
+    if (core.processor < snapshot.processors.size()) {
+        result = presented_metric(
+            aged_metric(snapshot.processors[core.processor].utilization, now, interval_ms));
+        if (result.status == Status::valid && (!std::isfinite(result.value) || result.value < 0)) {
+            result.status = Status::error;
         }
     }
     return result;
@@ -437,21 +446,18 @@ std::wstring metric_tooltip(const Layout &l, float x, float y, const Snapshot &s
         if (!contains(core.label, x, y)) {
             continue;
         }
-        auto result = core_label(core) + L" — color: busiest logical processor (% Processor Time)";
-        for (auto index : core.processors) {
-            if (index >= s.processors.size()) {
-                continue;
-            }
-            const auto &cpu = s.processors[index];
-            const auto m = aged_metric(cpu.utilization, now, settings.interval_ms);
-            if (index == core.processors.front()) {
-                result += cpu.efficiency_class
-                              ? std::format(L"; efficiency class {}", *cpu.efficiency_class)
-                              : L"; class unknown";
-            }
-            result += std::format(L"\nGroup {}, logical processor {}: {} [{}] {}", cpu.id.group,
-                                  cpu.id.number, metric_text(m), status_text(m.status), m.detail);
+        auto result = core_label(core) + L" — % Processor Time";
+        const auto index = core.processor;
+        if (index >= s.processors.size()) {
+            continue;
         }
+        const auto &cpu = s.processors[index];
+        const auto m = aged_metric(cpu.utilization, now, settings.interval_ms);
+        result += cpu.efficiency_class
+                      ? std::format(L"; efficiency class {}", *cpu.efficiency_class)
+                      : L"; class unknown";
+        result += std::format(L"\nGroup {}, logical processor {}: {} [{}] {}", cpu.id.group,
+                              cpu.id.number, metric_text(m), status_text(m.status), m.detail);
         return result;
     }
     for (const auto &b : l.blocks) {

@@ -11,7 +11,8 @@ struct CoreBox {
     unsigned core{};
     bool mapped{};
     ProcessorId logical;
-    std::vector<std::size_t> processors;
+    // One independently colored logical processor; core retains its physical relationship.
+    std::size_t processor{};
 };
 struct Layout {
     bool fits{};

@@ -12,8 +12,8 @@ space so ordinary maximized windows fit beside it; hover to reveal the numbers.
 
 Built in native C++, Loadbar samples once per second by default and redraws when readings
 or window state change. It reuses resources and keeps current readings rather than a growing
-history. No browser engine or background service. Measured CPU and RAM results are
-[pending](docs/performance.md).
+history. No browser engine or background service. See the [performance evidence](docs/performance.md);
+controlled CPU and RAM measurements for this version remain pending.
 
 ## What it shows
 
@@ -21,7 +21,7 @@ history. No browser engine or background service. Measured CPU and RAM results a
 
 | Widget | Readings |
 | --- | --- |
-| CPU | Physical-core rectangles colored by utilization, with every logical processor in details |
+| CPU | One colored tile per logical processor, with physical-core relationships in details |
 | RAM | Physical memory used, plus used/total GB on hover |
 | GPU | Separate 3D activity, video decode, and GPU memory |
 | Disks | Every discovered physical disk, with active time and separate read/write rates |
@@ -33,8 +33,8 @@ observation age remain available in details.
 
 ## Run Loadbar
 
-**Requires Windows 11 x64.** Download **[Loadbar 1.1.0](https://github.com/Vorta/Loadbar/releases/tag/v1.1.0)**.
-See the [release notes](docs/releases/1.1.0.md) for details and validation status.
+**Requires Windows 11 x64.** Download **[Loadbar 1.1.1](https://github.com/Vorta/Loadbar/releases/tag/v1.1.1)**.
+See the [release notes](docs/releases/1.1.1.md) for details and validation status.
 
 1. Run `Loadbar.exe`. Its notification-area icon may be in the overflow menu.
 2. Click the icon for **Settings**. Choose the monitor, edge, GPU and network interface.

@@ -71,8 +71,9 @@ void reading_tests() {
     peaks.observe(first);
     state.observe(first);
     const auto layout = make_layout(1920, 40, true, first.processors, 1, {}, 1);
-    require(core_metric(layout.cores[0], first, first.timestamp, 1000).value == 80,
-            "Physical core starts at busiest sibling");
+    require(core_metric(layout.cores[0], first, first.timestamp, 1000).value == 20 &&
+                core_metric(layout.cores[1], first, first.timestamp, 1000).value == 80,
+            "Logical processors start with their own values");
     for (auto status : {Status::error, Status::unavailable, Status::stale, Status::warming_up}) {
         auto failed = sample(2);
         failed.ram_total_bytes = failed.gpu_memory_capacity = 0;
@@ -83,7 +84,8 @@ void reading_tests() {
         state.observe(failed);
         require(failed.processors[1].utilization.status == status &&
                     failed.processors[1].utilization.value == 9999 &&
-                    core_metric(layout.cores[0], failed, failed.timestamp, 1000).value == 80 &&
+                    core_metric(layout.cores[0], failed, failed.timestamp, 1000).value == 20 &&
+                    core_metric(layout.cores[1], failed, failed.timestamp, 1000).value == 80 &&
                     cpu_summary(failed, {}, failed.timestamp) == L"50%",
                 "Repeated failures preserve raw status/value and display prior CPU values");
         require(ram_summary(failed, failed.timestamp, 1000) == L"48.0/64.0GB 75%" &&

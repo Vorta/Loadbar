@@ -1,5 +1,92 @@
 # Testing and verification
 
+## 1.1.1 publication build
+
+`pwsh -NoProfile -File scripts/package-release.ps1` configured and built the normal
+Release preset with version 1.1.1; all four CTest suites passed in 3.20 s. The script
+verified the single-entry ZIP against the tested executable. Artifact hashes and import/PE
+inspection are recorded in [packaging.md](packaging.md). The production source is unchanged
+from the reviewed and tested CPU-sizing update below; this pass updates version resources,
+release documentation and media. No live AppBar was launched.
+
+## Logical-processor/performance and CPU sizing update
+
+The 2026-10-08 update adds one tile per logical processor, reusable GPU aggregation scratch,
+explicit provider deactivation, bounded glow masks and NIC retry backoff. The subsequent
+CPU sizing correction allocates width to the tile grid and shares the remainder among devices.
+Its regression tests check four/eight logical tiles, spacing, thickness growth, hidden widgets
+and alignment. The RAM ellipsis fixture uses an 800-DIP edge so its ordinary capacity fits
+while oversized capacities still exercise truncation with full tooltip values. Regressions cover
+independent SMT colors/status/retention/high contrast, reordered identities, full processor-group
+visibility, scratch release versus ordinary reset, backoff deadlines/recovery, glow bounds,
+cache reuse and native-resource failure recovery. The four-core/eight-thread preview is
+`render-fixtures/uniform4-8threads-60-normal.png`; the four-thread version is
+`render-fixtures/uniform4-60-normal.png`, both under the candidate build: synthetic readings,
+1400 × 60 pixels at 96 DPI, produced by the normal renderer without an AppBar or hover text.
+
+Final warning-clean incremental builds and CTest results after the CPU sizing correction:
+
+| Configuration | Result | Duration |
+| --- | --- | --- |
+| Debug | 4/4 passed | 9.09 s |
+| Release candidate | 4/4 passed | 4.52 s |
+| RelWithDebInfo | 4/4 passed | 4.52 s |
+| ASan | 4/4 passed; no reported sanitizer errors | 14.67 s |
+
+Commands ran from the pinned developer environment. Configure was followed by build/test;
+small subsequent fixes used incremental builds and repeated all four suites:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --preset windows-x64-debug
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+cmake --preset windows-x64-relwithdebinfo
+cmake --build --preset windows-x64-relwithdebinfo
+ctest --preset windows-x64-relwithdebinfo --output-on-failure
+cmake --preset windows-x64-asan
+cmake --build --preset windows-x64-asan
+ctest --preset windows-x64-asan --output-on-failure
+cmake --preset windows-x64-release -B out/build/windows-x64-release-candidate
+cmake --build out/build/windows-x64-release-candidate
+ctest --test-dir out/build/windows-x64-release-candidate --output-on-failure
+cmake --build --preset windows-x64-debug --target format-check
+cmake --build --preset windows-x64-debug --target tidy
+cmake --build --preset windows-x64-debug --target analyze
+dumpbin /dependents out/build/windows-x64-release-candidate/Loadbar.exe
+git diff --check
+```
+
+Format-check, MSVC analysis and `git diff --check` passed. The full clang-tidy run found
+one implicit integer-to-float conversion in the new test assertion. After changing its
+literals to `6.0F`/`48.0F`, the affected file passed the same configured checks:
+
+```powershell
+clang-tidy -p out/build/windows-x64-debug/tidy-commands tests/design.cpp
+```
+
+All four configurations were rebuilt and all suites passed again after that test-only fix;
+the unchanged files had passed the full tidy run. Final repetitions used
+`cmake --build out/build/<directory>` and
+`ctest --test-dir out/build/<directory> --output-on-failure`, for `windows-x64-debug`,
+`windows-x64-release-candidate`, `windows-x64-relwithdebinfo` and `windows-x64-asan`.
+
+The isolated Release folder leaves the running published executable untouched. Dependency
+inspection lists Windows components only, with no VC++ runtime DLL import; source inspection
+found no explicit `LoadLibrary`, `GetProcAddress` or `/DELAYLOAD` path. This does not replace a
+clean-machine packaging check. The candidate executable SHA-256 is
+`133FD4466BDBEC0759D6F37EC703E020B73565CBEB9E6675E2DF7D85DBD3EDAA` (1,068,032 bytes).
+
+Two consecutive independent reviews of the thread/performance changes were clean. Two further
+independent CPU-sizing reviews and final documentation/fixture rechecks found no actionable
+defects. Both reviewers ran the Debug model tests; no assertions were removed or relaxed.
+No warnings or tests were disabled. No live AppBar was launched/stopped/reconfigured, and no
+user registry settings were changed. Live SMT hardware rendering, enlarged-glow appearance,
+CPU-to-RAM spacing on the live desktop, controlled process/GPU performance, one-hour soak
+and clean-machine packaging remain pending.
+The [performance evidence](performance.md) separates synthetic probe results from production
+measurements; [review.md](review.md) records independent review coverage.
+
 ## Drive visibility update
 
 The drive-checkbox implementation adds schema-9 exclusion persistence (including escaped IDs,
