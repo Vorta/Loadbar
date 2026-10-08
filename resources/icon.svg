@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 246 246">
+  <defs>
+    <style>
+      .st0 {
+        fill: #0e1116;
+      }
+
+      .st0, .st1 {
+        stroke: #aeb7c4;
+        stroke-miterlimit: 16;
+        stroke-width: 12px;
+      }
+
+      .st1 {
+        fill: none;
+        stroke-linecap: round;
+      }
+
+      .st2 {
+        fill: #f2b840;
+      }
+
+      .st3 {
+        fill: #ff3456;
+      }
+
+      .st4 {
+        fill: #3a4856;
+      }
+
+      .st5 {
+        fill: #34b6a6;
+      }
+    </style>
+  </defs>
+  <path class="st1" d="M87,6v36M123,6v36M159,6v36M87,204v36M123,204v36M159,204v36M6,87h36M6,123h36M6,159h36M204,87h36M204,123h36M204,159h36"/>
+  <rect class="st0" x="42" y="42" width="162" height="162" rx="28" ry="28"/>
+  <rect class="st5" x="73.5" y="73.5" width="45" height="45" rx="10" ry="10"/>
+  <rect class="st2" x="127.5" y="73.5" width="45" height="45" rx="10" ry="10"/>
+  <rect class="st4" x="73.5" y="127.5" width="45" height="45" rx="10" ry="10"/>
+  <rect class="st3" x="127.5" y="127.5" width="45" height="45" rx="10" ry="10"/>
+</svg>

@@ -1,0 +1,354 @@
+#include "model/geometry.hpp"
+#include "model/layout.hpp"
+#include "model/presentation.hpp"
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <set>
+#include <stdexcept>
+
+namespace {
+void require(bool value, const char *message) {
+    if (!value) {
+        throw std::runtime_error(message);
+    }
+}
+bool near(float a, float b) {
+    return std::abs(a - b) < 0.002F;
+}
+void scaling_tests() {
+    using namespace loadbar;
+    std::vector<Processor> hybrid;
+    hybrid.reserve(24);
+    for (unsigned i = 0; i < 24; ++i) {
+        hybrid.push_back({{0, i}, i, true, {}, i < 8 ? 1U : 0U});
+    }
+    const auto base = make_layout(3840, 40, true, hybrid, 1, {}, 2);
+    require(base.fits && base.content_scale == 1, "Compact appearance stays at its baseline");
+    for (float height : {40.0F, 80.0F, 120.0F, 80.0F, 40.0F}) {
+        const auto layout = make_layout(3840, height, true, hybrid, 1, {}, 2);
+        const float scale = height / 40;
+        require(layout.fits && near(layout.content_scale, scale) &&
+                    near(layout.blocks[0].icon.height, 14 * scale) &&
+                    near(layout.blocks[1].graphic.height, 22 * scale) &&
+                    near(layout.blocks[2].meters[0].height, 10 * scale) &&
+                    near(layout.blocks[2].meters[1].height, 4 * scale) &&
+                    near(layout.blocks.back().meters[0].height, 14 * scale) &&
+                    near(layout.blocks.back().meters[1].height, 6 * scale),
+                "Unconstrained thickness proportionally scales icons and every meter family");
+    }
+    const auto capped = make_layout(1000, 200, true, hybrid, 1, {}, 2);
+    const auto taller = make_layout(1000, 400, true, hybrid, 1, {}, 2);
+    require(capped.fits && taller.fits && capped.content_scale > 1 &&
+                near(capped.content_scale, taller.content_scale),
+            "Width-constrained contents stop growing instead of adding rows");
+    const auto large_text = make_layout(3840, 180, true, hybrid, 2.25F, {}, 2);
+    require(large_text.fits && large_text.content_scale > 2.25F,
+            "Combined content scale may exceed the Windows text-scale input limit");
+    require(!make_layout(3840, 180, true, hybrid, 2.26F, {}, 2).fits &&
+                !make_layout(10, 40, true, hybrid, 1, {}, 2).fits,
+            "Invalid text scale and compact layout failures remain explicit");
+    std::vector<std::vector<Processor>> topologies{{}, hybrid};
+    for (bool mixed : {false, true}) {
+        std::vector<Processor> topology;
+        topology.reserve(128);
+        for (unsigned i = 0; i < 128; ++i) {
+            topology.push_back({{i / 64, i % 64},
+                                i / 2,
+                                true,
+                                {},
+                                mixed ? std::optional<unsigned>(i < 32 ? 1U : 0U) : std::nullopt});
+        }
+        topologies.push_back(std::move(topology));
+    }
+    for (const auto &processors : topologies) {
+        for (bool horizontal : {false, true}) {
+            const float length = horizontal ? 618.0F : 1080.0F;
+            for (float text_scale : {1.0F, 1.25F, 1.5F, 2.0F, 2.25F}) {
+                for (std::size_t disks : {0U, 2U, 4U}) {
+                    const auto minimum = static_cast<float>(minimum_thickness(
+                        length, 4096, horizontal, processors, text_scale, {}, disks));
+                    require(minimum <= 4096, "Test topology has a fitting compact layout");
+                    const auto at = [&](float thickness) {
+                        return make_layout(horizontal ? length : thickness,
+                                           horizontal ? thickness : length, horizontal, processors,
+                                           text_scale, {}, disks);
+                    };
+                    const auto compact = at(minimum);
+                    require(compact.fits && near(compact.content_scale, text_scale),
+                            "Readable minimum does not magnify contents");
+                    float previous_scale = text_scale;
+                    for (float multiple : {1.0F, 1.25F, 2.0F, 3.0F}) {
+                        const float thickness = minimum * multiple;
+                        const float width = horizontal ? length : thickness;
+                        const float height = horizontal ? thickness : length;
+                        const auto layout = at(thickness);
+                        require(layout.fits && layout.content_scale + 0.002F >= previous_scale,
+                                "Magnification is nondecreasing with thickness");
+                        previous_scale = layout.content_scale;
+                        require(layout.cores.size() == compact.cores.size() &&
+                                    layout.blocks.size() == compact.blocks.size(),
+                                "Scaling retains every physical core and disk");
+                        std::set<std::size_t> membership;
+                        for (std::size_t i = 0; i < layout.cores.size(); ++i) {
+                            const auto &a = layout.cores[i];
+                            const auto &b = compact.cores[i];
+                            require(a.processors == b.processors &&
+                                        near((a.label.y - layout.blocks[0].graphic.y) /
+                                                 layout.content_scale,
+                                             (b.label.y - compact.blocks[0].graphic.y) /
+                                                 compact.content_scale),
+                                    "CPU row and logical-processor membership remain fixed");
+                            require(a.label.width + 0.002F >= a.label.height,
+                                    "Fixed CPU columns retain their minimum cell widths");
+                            membership.insert(a.processors.begin(), a.processors.end());
+                        }
+                        require(membership.size() == processors.size(),
+                                "No logical processor is omitted by scaling");
+                        for (std::size_t i = 0; i < layout.blocks.size(); ++i) {
+                            const auto &a = layout.blocks[i];
+                            const auto &b = compact.blocks[i];
+                            require(near(a.graphic.width, layout.blocks[0].graphic.width) &&
+                                        near((a.bounds.y - layout.blocks[0].bounds.y) /
+                                                 layout.content_scale,
+                                             (b.bounds.y - compact.blocks[0].bounds.y) /
+                                                 compact.content_scale),
+                                    "Equal graphic widths and widget rows remain fixed");
+                        }
+                        for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+                            auto snapped = layout;
+                            snap_layout(snapped, dpi);
+                            const float pixel =
+                                96 / dpi +
+                                0.002F; // Include float roundoff at a one-pixel boundary.
+                            for (const auto &block : snapped.blocks) {
+                                require(block.graphic.width == snapped.blocks[0].graphic.width &&
+                                            block.bounds.x >= 0 && block.bounds.y >= 0 &&
+                                            block.bounds.x + block.bounds.width <= width + pixel &&
+                                            block.bounds.y + block.bounds.height <= height + pixel,
+                                        "Snapped widgets fit with equal physical widths");
+                            }
+                            const auto graphic = snapped.blocks[0].graphic;
+                            for (const auto &core : snapped.cores) {
+                                require(core.label.x >= graphic.x - pixel &&
+                                            core.label.y >= graphic.y - pixel &&
+                                            core.label.x + core.label.width <=
+                                                graphic.x + graphic.width + pixel &&
+                                            core.label.y + core.label.height <=
+                                                graphic.y + graphic.height + pixel,
+                                        "Every snapped CPU cell stays within its graphic");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Snapshot snapshot;
+    snapshot.processors = hybrid;
+    const auto enlarged = make_layout(3840, 120, true, hybrid, 1);
+    const auto cell = enlarged.cores.front().label;
+    require(metric_tooltip(enlarged, cell.x + cell.width / 2, cell.y + cell.height / 2, snapshot,
+                           {}, {})
+                    .find(L"Core 0") != std::wstring::npos,
+            "Tooltip hit testing follows enlarged CPU bounds");
+    for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+        const Box box{13.3F, 30.7F, 107.4F, 22.3F};
+        const float scale = 2.37F, pixels_per_dip = dpi / 96;
+        const auto paint = expanded_paint_bounds(box, scale, dpi);
+        const float pad = glow_padding_dips(scale, dpi);
+        require(pad >= 12 * scale && near(pad * pixels_per_dip, std::round(pad * pixels_per_dip)) &&
+                    paint.x <= box.x - pad && paint.y <= box.y - pad &&
+                    paint.x + paint.width >=
+                        box.x - pad + (std::ceil(box.width * pixels_per_dip) / pixels_per_dip) +
+                            2 * pad,
+                "Dirty bounds include scaled glow and bitmap rounding at each DPI");
+    }
+}
+} // namespace
+void run_design_tests() {
+    scaling_tests();
+    using namespace loadbar;
+    Metric old_value{50, Status::valid, Unit::percent, {}, {}, {}};
+    auto new_value = old_value;
+    new_value.timestamp = Clock::time_point{} + std::chrono::seconds(4);
+    require(metric_changed(old_value, new_value, new_value.timestamp, 1000),
+            "Fresh equal value repaints a previously aged status");
+    require(!metric_changed(new_value, new_value, new_value.timestamp, 1000),
+            "Unchanged fresh value does not repaint");
+    Snapshot expired;
+    expired.gauges[3] = old_value;
+    expired.gpu_memory_bytes = {50, Status::valid, Unit::bytes, {}, {}, {}, L"selected-gpu"};
+    require(expire_snapshot(expired, new_value.timestamp, 1000) &&
+                expired.gauges[3].status == Status::stale &&
+                expired.gpu_memory_bytes.status == Status::stale,
+            "Both GPU memory representations expire");
+    Snapshot s;
+    for (auto status : {Status::warming_up, Status::error}) {
+        set_snapshot_status(expired, status, L"Transition");
+        require(expired.gpu_memory_bytes.status == status && expired.gauges[3].status == status &&
+                    expired.gpu_memory_bytes.unit == Unit::bytes &&
+                    expired.gpu_memory_bytes.identity == L"selected-gpu",
+                "Priming and failure preserve GPU memory units and identities");
+    }
+    for (unsigned i = 0; i < 24; ++i) {
+        s.processors.push_back(
+            {{0, i}, i, true, {50, Status::valid, Unit::percent, {}, {}, {}}, i < 8 ? 1U : 0U});
+    }
+    for (std::size_t disks : {0U, 1U, 2U, 4U}) {
+        for (float w : {506.0F, 618.0F, 1274.0F, 2560.0F}) {
+            const auto thickness = minimum_thickness(w, 480, true, s.processors, 1, {}, disks);
+            const auto l =
+                make_layout(w, static_cast<float>(thickness), true, s.processors, 1, {}, disks);
+            require(l.fits && l.cores.size() == 24, "Every core fits after equal-width reflow");
+            require(l.blocks.size() == std::max(std::size_t{1}, disks) + 4,
+                    "Every disk gets its own block");
+            for (const auto &b : l.blocks) {
+                require(std::abs(b.graphic.width - l.blocks[0].graphic.width) < 0.001F,
+                        "CPU and every device share graphic width");
+                require(b.bounds.x >= 0 && b.bounds.x + b.bounds.width <= w + 0.001F &&
+                            b.bounds.y >= 0 && b.bounds.y + b.bounds.height <= thickness,
+                        "All blocks remain inside layout");
+            }
+            for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+                auto snapped = l;
+                snap_layout(snapped, dpi);
+                for (const auto &b : snapped.blocks) {
+                    require(std::abs(b.graphic.x * dpi / 96 - std::round(b.graphic.x * dpi / 96)) <
+                                    0.001F &&
+                                b.graphic.width == snapped.blocks[0].graphic.width,
+                            "Equal physical widths including CPU and disks");
+                }
+            }
+        }
+    }
+    for (bool horizontal : {true, false}) {
+        for (float scale : {1.0F, 1.25F, 1.5F, 2.0F, 2.25F}) {
+            const float length = horizontal ? 540.0F : 1080.0F;
+            const auto thickness =
+                minimum_thickness(length, 480, horizontal, s.processors, scale, {}, 2);
+            require(thickness <= 480, "Two-disk layout reflows at text scale");
+            const auto l = make_layout(horizontal ? length : static_cast<float>(thickness),
+                                       horizontal ? static_cast<float>(thickness) : length,
+                                       horizontal, s.processors, scale, {}, 2);
+            require(l.fits && l.cores.size() == 24, "Reflow retains all core cells");
+            for (const auto &b : l.blocks) {
+                require(b.graphic.width >= 48 * scale && b.graphic.height >= 22 * scale,
+                        "Readable metrics");
+            }
+        }
+    }
+    Settings settings;
+    auto wide = make_layout(1920, 40, true, s.processors, 1, settings, 2);
+    require(wide.fits && wide.blocks[0].graphic.width > 240,
+            "CPU and devices stretch across a wide edge");
+    require(wide.cores[0].label.width > wide.cores[0].label.height, "CPU cells are rectangles");
+    require(std::abs(wide.cores[0].label.width - (wide.cores[8].label.width * 2 + 2)) < 0.001F,
+            "P cell spans two E cells proportionally");
+    require(wide.blocks[2].meters[0].height == 10 && wide.blocks[2].meters[1].height == 4 &&
+                wide.blocks[2].meters[2].height == 4,
+            "GPU bands");
+    require(wide.blocks[3].meters[0].height == 10 && wide.blocks[3].meters[1].height == 4 &&
+                wide.blocks[3].meters[2].height == 4,
+            "Disk active/read/write bands match GPU geometry");
+    auto l = make_layout(1920, 40, true, s.processors, 1, settings, 2);
+    require(l.blocks[5].meters[0].height == 14 && l.blocks[5].meters[1].height == 6 &&
+                l.blocks[3].meters[0].height == 10 && l.blocks[4].meters[0].height == 10,
+            "Network permanently uses the 14/6 reference split");
+    require(heat_color(0) == rgb(0x3A4856) && heat_color(30) == rgb(0x34B6A6) &&
+                heat_color(100) == rgb(0xFF3456),
+            "Exact heat stops");
+    const auto mid = heat_color(15);
+    require(std::abs(mid.r - (rgb(0x3A4856).r + rgb(0x34B6A6).r) / 2) < 0.00001F,
+            "sRGB interpolation");
+    require(tone(rgb(0), rgb(0xFFFFFF), 0).r == 0.7F, "Tone at zero");
+    Metric m{0.5, Status::valid, Unit::percent, {}, {}, {}};
+    require(graphic_fraction(Gauge::gpu_decode, m) == 0, "Decode visual floor");
+    m.value = 0.6;
+    require(graphic_fraction(Gauge::gpu_decode, m) > 0, "Decode above floor");
+    m.value = 91;
+    require(glows(Gauge::ram, m) && !glows(Gauge::disk_read, m), "Only percentage families glow");
+    m.status = Status::stale;
+    require(!glows(Gauge::ram, m) && compact_value(m) == L"—", "Invalid states never healthy zero");
+    require(cpu_summary(s, settings, {}) == L"50%  P 50%  E 50%",
+            "Logical processor weighted summaries");
+    s.processors[0].utilization.status = Status::error;
+    require(cpu_summary(s, settings, {}) == L"CPU — incomplete", "Partial CPU data is explicit");
+    auto legacy = decode_settings(
+        L"Loadbar 1 4 0 5 1000 500 1073741824 131072000 131072000 \"m\" \"d\" \"g\" \"n\"");
+    require(legacy && legacy->legacy_percent == 5 && legacy->monitor_id == L"m",
+            "Version one migration preserves choices and retires small ceilings");
+    require(migrate_thickness(*legacy, {0, 0, 1920, 1080}, 144) && legacy->thickness == 40 &&
+                !legacy->legacy_percent,
+            "Legacy percent converts once using monitor/DPI then applies the 40-DIP minimum");
+    require(migrate_thickness(*legacy, {0, 0, 1080, 1920}, 192) && legacy->thickness == 40,
+            "DIP thickness survives rotation and DPI change");
+    require(encode_settings(*legacy).starts_with(L"Loadbar 7 ") &&
+                decode_settings(encode_settings(*legacy)) == legacy,
+            "DIP-only schema persists migration");
+    require(!decode_settings(
+                L"Loadbar 2 4 0 26 1000 10000 10000 10000 10000 \"m\" \"d\" \"g\" \"n\" 0 1 0 0 0"),
+            "Reject malformed legacy percentage");
+    Snapshot smt;
+    smt.processors = {{{0, 0}, 0, true, {20, Status::valid, Unit::percent, {}, {}, {}}},
+                      {{0, 1}, 0, true, {80, Status::valid, Unit::percent, {}, {}, {}}}};
+    const auto smt_layout = make_layout(1920, 40, true, smt.processors, 1);
+    require(smt_layout.cores.size() == 1 && smt_layout.cores[0].processors.size() == 2 &&
+                core_metric(smt_layout.cores[0], smt, {}, 1000).value == 80,
+            "One physical core uses busiest sibling, never a sum");
+    const auto cell = smt_layout.cores[0].label;
+    const auto tip = metric_tooltip(smt_layout, cell.x + 2, cell.y + 2, smt, {}, {});
+    require(tip.find(L"logical processor 0") != std::wstring::npos &&
+                tip.find(L"logical processor 1") != std::wstring::npos,
+            "Core tooltip retains every logical processor");
+    smt.processors[1].utilization.status = Status::error;
+    require(core_metric(smt_layout.cores[0], smt, {}, 1000).status == Status::error,
+            "Partial core is not healthy");
+    smt.processors[1].utilization.status = Status::valid;
+    smt.processors[1].utilization.value = std::numeric_limits<double>::quiet_NaN();
+    require(core_metric(smt_layout.cores[0], smt, {}, 1000).status == Status::error,
+            "Nonfinite core is not healthy");
+    Device d0{DeviceKind::disk, L"id0", L"Disk 0", 0}, d1{DeviceKind::disk, L"id1", L"Disk 1", 1};
+    const Metric rate{123, Status::valid, Unit::bytes_per_second, {}, {}, {}};
+    std::vector<CounterItem> counters{
+        {L"1 D:", rate}, {L"_Total", rate}, {L"10 E:", rate}, {L"0 C:", rate}};
+    require(disk_counter(counters, d0, {}).identity == L"id0" &&
+                disk_counter(counters, d1, {}).identity == L"id1",
+            "Reordered disks match exact index with stable identity");
+    counters.pop_back();
+    require(disk_counter(counters, d0, {}).status == Status::unavailable &&
+                disk_counter(counters, d1, {}).status == Status::valid,
+            "Missing disk does not affect other disk");
+    counters.push_back(counters.front());
+    require(disk_counter(counters, d1, {}).status == Status::error,
+            "Duplicate disk counter is rejected");
+    require(block_metric(wide.blocks[3], Gauge::disk_read, s).status == Status::unavailable &&
+                metric_tooltip(wide, wide.blocks[3].bounds.x + 1, wide.blocks[3].bounds.y + 1, s,
+                               {}, {})
+                        .find(L"No physical disk discovered") == 0,
+            "Empty catalog keeps an explicit unavailable disk widget");
+    s.disks = {{L"id0", L"Disk 0", rate, rate}, {L"id1", L"Disk 1", rate, rate}};
+    s.disks[1].read.value = 456;
+    require(block_metric(wide.blocks[3], Gauge::disk_read, s).value == 123 &&
+                block_metric(wide.blocks[4], Gauge::disk_read, s).value == 456,
+            "Two disk widgets keep independent values");
+    require(
+        metric_tooltip(wide, wide.blocks[4].bounds.x + 1, wide.blocks[4].bounds.y + 1, s, {}, {})
+            .starts_with(L"Disk 1"),
+        "Second disk has its own tooltip");
+    require(expire_snapshot(s, Clock::time_point{} + std::chrono::seconds(4), 1000) &&
+                s.disks[0].read.status == Status::stale && s.disks[1].write.status == Status::stale,
+            "Every disk metric expires");
+    set_snapshot_status(s, Status::warming_up, L"Resume");
+    require(s.disks[1].read.status == Status::warming_up &&
+                s.disks[0].write.unit == Unit::bytes_per_second,
+            "Resume primes both disks");
+    require(decode_settings(encode_settings(settings)) == settings, "Appearance round trip");
+    auto changed = settings;
+    changed.edge = Edge::bottom;
+    require(!collection_changed(settings, changed),
+            "Appearance and placement do not reset collection");
+    changed.interval_ms = 500;
+    require(collection_changed(settings, changed), "Cadence resets collection");
+    std::cout << "Design model, layout, scales and settings tests passed\n";
+}
