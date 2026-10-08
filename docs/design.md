@@ -8,10 +8,19 @@ provide complete readings when inline text cannot fit.
 ## Layout and scaling
 
 CPU and every device widget share equal graphic widths along the full negotiated edge.
-Physical-core rectangles stretch proportionally. In a hybrid 8+16 layout, one performance-core
+Hybrid physical-core rectangles stretch proportionally. In an 8+16 layout, one performance-core
 cell spans two efficiency cells plus their gap; compact reference heights are 14/6 DIPs.
 Efficiency classes group cores without changing metric aggregation. Uniform or unknown
-topology uses neutral grouping.
+topology uses equally sized squares, left-aligned within the CPU widget. Squares use a single
+row whenever they fit at the 6-DIP readable minimum, otherwise wrap with 2-DIP reference gaps.
+Their side length fits the existing CPU band; spare width does not force extra bar height.
+
+Drives checkboxes appear below Network and above Edge in Settings. Unchecking a drive hides
+its widget on Apply; new disks are checked automatically, and Cancel restores committed choices.
+
+GPU and Network offer **Hide** independently. Hidden widgets leave no gap or hit target;
+remaining widgets share the freed width. CPU allocation remains equal to other graphics even
+when its height-limited squares leave spare space.
 
 The compact layout determines widget and CPU rows from edge length, topology, device count
 and Windows text scale. Greater bar thickness magnifies graphics, icons, hover fonts and

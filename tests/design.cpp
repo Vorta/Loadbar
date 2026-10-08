@@ -16,6 +16,104 @@ void require(bool value, const char *message) {
 bool near(float a, float b) {
     return std::abs(a - b) < 0.002F;
 }
+
+void visibility_layout_tests() {
+    using namespace loadbar;
+    for (unsigned mask = 0; mask < 4; ++mask) {
+        Settings settings;
+        settings.gpu_id = L"remembered-gpu";
+        settings.network_id = L"remembered-nic";
+        settings.gpu_visible = (mask & 1U) != 0;
+        settings.network_visible = (mask & 2U) != 0;
+        require(decode_settings(encode_settings(settings)) == settings,
+                "Visibility persists independently of remembered identities");
+        settings.legacy_percent = 5.5;
+        require(decode_settings(encode_settings(settings)) == settings,
+                "Pending legacy percentage migration survives visibility persistence");
+        for (unsigned count : {1U, 4U, 8U, 24U, 64U, 128U}) {
+            std::vector<Processor> cpus;
+            cpus.reserve(static_cast<std::size_t>(count) * 2);
+            for (unsigned i = 0; i < count * 2; ++i) {
+                cpus.push_back({{i / 64, i % 64}, i / 2, true, {}, 0U});
+            }
+            for (bool horizontal : {false, true}) {
+                for (float text_scale : {1.0F, 1.5F, 2.25F}) {
+                    const auto minimum = static_cast<float>(
+                        minimum_thickness(1400, 4096, horizontal, cpus, text_scale, settings, 2));
+                    const float thickness = std::max(60.0F, minimum);
+                    auto layout =
+                        make_layout(horizontal ? 1400 : thickness, horizontal ? thickness : 1400,
+                                    horizontal, cpus, text_scale, settings, 2);
+                    require(layout.fits && layout.cores.size() == count &&
+                                layout.blocks.size() ==
+                                    4U + settings.gpu_visible + settings.network_visible,
+                            "Every physical core and visible device fits both orientations");
+                    for (const auto &block : layout.blocks) {
+                        require(near(block.graphic.width, layout.blocks[0].graphic.width),
+                                "Visible widgets retain equal allocated graphic widths");
+                        require((block.kind != 2 || settings.gpu_visible) &&
+                                    (block.kind != 4 || settings.network_visible),
+                                "Hidden widgets have no block or tooltip hit target");
+                    }
+                    for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+                        auto snapped = layout;
+                        snap_layout(snapped, dpi);
+                        for (std::size_t i = 0; i < snapped.cores.size(); ++i) {
+                            const auto &box = snapped.cores[i].label;
+                            require(near(box.width, box.height) &&
+                                        near(box.width, snapped.cores[0].label.width) &&
+                                        box.width >= 6 && snapped.cores[i].processors.size() == 2,
+                                    "Uniform SMT cores remain equal readable squares after pixel "
+                                    "snapping");
+                            for (std::size_t j = 0; j < i; ++j) {
+                                const auto &other = snapped.cores[j].label;
+                                require(box.x >= other.x + other.width ||
+                                            other.x >= box.x + box.width ||
+                                            box.y >= other.y + other.height ||
+                                            other.y >= box.y + box.height,
+                                        "Square core rows never overlap");
+                            }
+                        }
+                    }
+                    if (count == 4 && horizontal && text_scale == 1) {
+                        require(
+                            minimum == 40 &&
+                                near(layout.cores.front().label.y, layout.cores.back().label.y),
+                            "Four uniform cores use one row without increasing the minimum height");
+                        const auto original = make_layout(1400, thickness, true, cpus, 1, {}, 2);
+                        require(layout.blocks[1].graphic.width >= original.blocks[1].graphic.width,
+                                "Removing widgets redistributes freed width");
+                    }
+                }
+            }
+            for (auto &cpu : cpus) {
+                cpu.efficiency_class.reset();
+            }
+            const auto unknown = make_layout(1400, 640, true, cpus, 1, settings, 2);
+            require(unknown.fits &&
+                        near(unknown.cores[0].label.width, unknown.cores[0].label.height),
+                    "Unknown efficiency classes use honest uniform squares");
+        }
+    }
+    auto old = decode_settings(L"Loadbar 7 2 60 1000 \"monitor\" \"gpu\" \"nic\" 1");
+    require(old && old->gpu_visible && old->network_visible && old->gpu_id == L"gpu",
+            "Version 7 migrates with both widgets visible and identities intact");
+    for (auto suffix : {L"2 1 0", L"1 2 0", L"1 1 -1", L"1 1 26", L"1", L"1 1 0 extra"}) {
+        require(!decode_settings(std::wstring(L"Loadbar 8 2 60 1000 \"\" \"\" \"\" 1 ") + suffix),
+                "Malformed visibility and migration records rejected");
+    }
+    Snapshot snapshot;
+    snapshot.gauges[1] = {70, Status::valid, Unit::percent, {}, {}, {}};
+    snapshot.gauges[4] = {1024, Status::valid, Unit::bytes_per_second, {}, {}, {}};
+    Settings hidden;
+    hidden.gpu_visible = hidden.network_visible = false;
+    require(
+        next_stale_deadline(snapshot, 1000).has_value() &&
+            !next_stale_deadline(snapshot, 1000, hidden) &&
+            !expire_snapshot(snapshot, Clock::time_point{} + std::chrono::seconds(9), 1000, hidden),
+        "Hidden metrics neither arm freshness deadlines nor trigger expiry repaint");
+}
+
 void scaling_tests() {
     using namespace loadbar;
     std::vector<Processor> hybrid;
@@ -168,6 +266,7 @@ void scaling_tests() {
 } // namespace
 void run_design_tests() {
     scaling_tests();
+    visibility_layout_tests();
     using namespace loadbar;
     Metric old_value{50, Status::valid, Unit::percent, {}, {}, {}};
     auto new_value = old_value;
@@ -196,10 +295,13 @@ void run_design_tests() {
             {{0, i}, i, true, {50, Status::valid, Unit::percent, {}, {}, {}}, i < 8 ? 1U : 0U});
     }
     for (std::size_t disks : {0U, 1U, 2U, 4U}) {
+        auto inventory = s;
+        inventory.disks.resize(disks);
         for (float w : {506.0F, 618.0F, 1274.0F, 2560.0F}) {
-            const auto thickness = minimum_thickness(w, 480, true, s.processors, 1, {}, disks);
+            const auto thickness = minimum_thickness(w, 480, true, s.processors, 1, {},
+                                                     disk_widget_count(inventory.disks, {}));
             const auto l =
-                make_layout(w, static_cast<float>(thickness), true, s.processors, 1, {}, disks);
+                make_snapshot_layout(w, static_cast<float>(thickness), true, inventory, 1, {});
             require(l.fits && l.cores.size() == 24, "Every core fits after equal-width reflow");
             require(l.blocks.size() == std::max(std::size_t{1}, disks) + 4,
                     "Every disk gets its own block");
@@ -283,7 +385,7 @@ void run_design_tests() {
             "Legacy percent converts once using monitor/DPI then applies the 40-DIP minimum");
     require(migrate_thickness(*legacy, {0, 0, 1080, 1920}, 192) && legacy->thickness == 40,
             "DIP thickness survives rotation and DPI change");
-    require(encode_settings(*legacy).starts_with(L"Loadbar 7 ") &&
+    require(encode_settings(*legacy).starts_with(L"Loadbar 9 ") &&
                 decode_settings(encode_settings(*legacy)) == legacy,
             "DIP-only schema persists migration");
     require(!decode_settings(

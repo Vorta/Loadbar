@@ -1,5 +1,6 @@
 #include "model/continuity.hpp"
 #include "ui/renderer.hpp"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -90,6 +91,129 @@ loadbar::Snapshot fixture() {
     s.network_label = L"Test NIC (fixture only)";
     return s;
 }
+
+void uniform_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                                     const std::filesystem::path &directory) {
+    using namespace loadbar;
+    auto snapshot = fixture();
+    snapshot.processors.resize(4);
+    for (unsigned i = 0; i < 4; ++i) {
+        snapshot.processors[i].efficiency_class = 0;
+        snapshot.processors[i].utilization.value = 15 + i * 25;
+    }
+    for (bool horizontal : {true, false}) {
+        const UINT width = horizontal ? 1400U : 140U, height = horizontal ? 60U : 1000U;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        Renderer reused;
+        for (unsigned mask : {3U, 2U, 0U, 1U, 3U}) {
+            Settings settings;
+            settings.gpu_visible = (mask & 1U) != 0;
+            settings.network_visible = (mask & 2U) != 0;
+            checked(reused.render_to(target.Get(), snapshot, settings, horizontal, false, 1, false,
+                                     false, {}));
+            const auto actual = pixels(bitmap.Get(), width, height);
+            Renderer fresh;
+            checked(fresh.render_to(target.Get(), snapshot, settings, horizontal, false, 1, false,
+                                    false, {}));
+            require(actual == pixels(bitmap.Get(), width, height),
+                    "Visibility toggles rebuild cached production rendering exactly");
+            const auto layout = make_layout(static_cast<float>(width), static_cast<float>(height),
+                                            horizontal, snapshot.processors, 1, settings, 2);
+            require(layout.fits && layout.cores.size() == 4, "Preview has four physical cores");
+            if (horizontal && (mask == 3 || mask == 0)) {
+                save(wic, bitmap.Get(),
+                     directory /
+                         (mask == 3 ? L"uniform4-60-normal.png" : L"uniform4-60-hidden.png"));
+            }
+        }
+    }
+}
+
+void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
+    using namespace loadbar;
+    const auto snapshot = fixture();
+    for (bool horizontal : {true, false}) {
+        const UINT width = horizontal ? 1400U : 160U, height = horizontal ? 80U : 1000U;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        Renderer reused;
+        for (bool extras : {true, false}) {
+            for (unsigned mask : {0U, 1U, 2U, 3U, 0U}) {
+                Settings settings;
+                settings.gpu_visible = settings.network_visible = extras;
+                for (std::size_t i = 0; i < 2; ++i) {
+                    if (mask & (1U << i)) {
+                        hide_disk(settings.hidden_disks, snapshot.disks[i].id);
+                    }
+                }
+                const auto layout =
+                    make_snapshot_layout(static_cast<float>(width), static_cast<float>(height),
+                                         horizontal, snapshot, 1, settings);
+                require(layout.fits && layout.cores.size() == snapshot.processors.size(),
+                        "Disk visibility retains every CPU core in both orientations");
+                std::size_t disk_blocks{};
+                for (const auto &block : layout.blocks) {
+                    require(std::abs(block.graphic.width - layout.blocks.front().graphic.width) <
+                                0.001F,
+                            "Visible widgets share graphic widths");
+                    if (block.kind == 3) {
+                        ++disk_blocks;
+                        require(block.disk < snapshot.disks.size() &&
+                                    disk_visible(snapshot.disks[block.disk].id, settings),
+                                "Disk block refers to original visible snapshot index");
+                        const auto tip = metric_tooltip(layout, block.bounds.x + 1,
+                                                        block.bounds.y + 1, snapshot, settings, {});
+                        require(tip.find(snapshot.disks[block.disk].label) != std::wstring::npos,
+                                "Visible disk tooltip retains correct device identity");
+                    }
+                }
+                require(disk_blocks == disk_widget_count(snapshot.disks, settings) &&
+                            layout.blocks.size() == 2 + disk_blocks + (extras ? 2 : 0),
+                        "Hidden disks have no placeholder and remaining widgets fill space");
+                checked(reused.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
+                                         false, false, {}));
+                const auto actual = pixels(bitmap.Get(), width, height);
+                Renderer fresh;
+                checked(fresh.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
+                                        false, false, {}));
+                require(actual == pixels(bitmap.Get(), width, height),
+                        "Same-count disk swaps invalidate cached layout identities");
+                auto changed = snapshot;
+                for (auto &disk : changed.disks) {
+                    if (!disk_visible(disk.id, settings)) {
+                        disk.active.value = 0;
+                        disk.read.value = disk.write.value = 0;
+                    }
+                }
+                checked(reused.render_to(target.Get(), changed, settings, horizontal, false, 1,
+                                         false, false, {}));
+                require(actual == pixels(bitmap.Get(), width, height),
+                        "Hidden disk readings cannot affect visible rendering");
+            }
+        }
+    }
+    Settings settings;
+    settings.hidden_disks = {L"disk0", L"disk1"};
+    auto changed = snapshot;
+    changed.disks.push_back({L"new", L"New drive"});
+    require(disk_widget_count(changed.disks, settings) == 1,
+            "New drive is visible even when prior drives were all hidden");
+    changed.disks.clear();
+    const auto absent = make_snapshot_layout(1400, 80, true, changed, 1, settings);
+    require(disk_widget_count(changed.disks, settings) == 1 &&
+                std::ranges::count(absent.blocks, 3U, &Layout::Block::kind) == 1,
+            "No discovered drives still produces the explicit unavailable placeholder");
+}
+
 void contrast_load_regression(IWICImagingFactory *wic, ID2D1Factory *factory) {
     Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
     checked(
@@ -445,6 +569,8 @@ int wmain(int argc, wchar_t **argv) {
         checked(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.GetAddressOf()));
         const std::filesystem::path directory(argv[1]);
         std::filesystem::create_directories(directory);
+        uniform_visibility_render_tests(wic.Get(), factory.Get(), directory);
+        drive_visibility_render_tests(wic.Get(), factory.Get());
         contrast_load_regression(wic.Get(), factory.Get());
         contrast_palette_tests(wic.Get(), factory.Get(), directory);
         continuity_render_tests(wic.Get(), factory.Get(), directory);

@@ -7,6 +7,7 @@
 #include <compare>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -69,6 +70,8 @@ struct DiskReading {
     Metric write{read};
     Metric active{0, Status::unavailable, Unit::percent, {}, {}, L"Disk idle counter absent"};
 };
+[[nodiscard]] std::size_t disk_widget_count(std::span<const DiskReading> disks,
+                                            const Settings &settings);
 [[nodiscard]] Metric disk_counter(const std::vector<CounterItem> &items, const Device &disk,
                                   Clock::time_point now, Unit unit = Unit::bytes_per_second);
 [[nodiscard]] Metric disk_active_time(Metric idle);
@@ -100,16 +103,27 @@ void set_physical_memory(Snapshot &snapshot, std::uint64_t total, std::uint64_t 
 [[nodiscard]] constexpr Unit gauge_unit(Gauge gauge) noexcept {
     return is_rate_gauge(gauge) ? Unit::bytes_per_second : Unit::percent;
 }
+[[nodiscard]] constexpr bool gauge_visible(Gauge gauge, const Settings &settings) noexcept {
+    if (gauge >= Gauge::gpu_3d && gauge <= Gauge::gpu_memory) {
+        return settings.gpu_visible;
+    }
+    if (gauge == Gauge::download || gauge == Gauge::upload) {
+        return settings.network_visible;
+    }
+    return true;
+}
 [[nodiscard]] MetricView aged_metric(MetricView metric, Clock::time_point now,
                                      unsigned interval_ms) noexcept;
 // The exact next status transition; absent once no valid observations remain.
-[[nodiscard]] std::optional<Clock::time_point> next_stale_deadline(const Snapshot &snapshot,
-                                                                   unsigned interval_ms) noexcept;
+[[nodiscard]] std::optional<Clock::time_point>
+next_stale_deadline(const Snapshot &snapshot, unsigned interval_ms,
+                    const Settings &visibility = {}) noexcept;
 // Next rounded-seconds retained-age text change. Only needed while details are visible.
 [[nodiscard]] std::optional<Clock::time_point>
-next_retention_deadline(const Snapshot &snapshot, Clock::time_point now,
-                        unsigned interval_ms) noexcept;
-[[nodiscard]] bool expire_snapshot(Snapshot &snapshot, Clock::time_point now, unsigned interval_ms);
+next_retention_deadline(const Snapshot &snapshot, Clock::time_point now, unsigned interval_ms,
+                        const Settings &visibility = {}) noexcept;
+[[nodiscard]] bool expire_snapshot(Snapshot &snapshot, Clock::time_point now, unsigned interval_ms,
+                                   const Settings &visibility = {});
 void set_snapshot_status(Snapshot &snapshot, Status status, std::wstring_view detail);
 [[nodiscard]] std::optional<ProcessorId> parse_processor(std::wstring_view name);
 struct EngineId {

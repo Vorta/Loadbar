@@ -1,9 +1,27 @@
 # Packaging and release evidence
 
-## Prepared artifact
+## 1.1.0 release artifact
+
+`out/build/windows-x64-release/Loadbar.exe` was built on 2026-10-08 with embedded version
+1.1.0 and author Vorta (1,071,616 bytes), including drive visibility. `dumpbin /dependents`
+lists only Windows components, with no VC++ runtime DLL dependency. A source/build search for `LoadLibrary`,
+`LoadPackagedLibrary`, `GetProcAddress` and `DELAYLOAD` found no explicit dynamic/delayed loads.
+SHA-256: `B22AD2C4D7ED83B48F99AB02A2DBC310F0F2FC2AF59D10AB30B109A8BE008ECB`.
+Header inspection confirms x64, CFG, ASLR, DEP, high-entropy VA and no delay-import entries.
+The release package was staged using `pwsh -NoProfile -File scripts/package-release.ps1`:
+Release configure/build passed, all four CTest suites passed in 3.57 s, and the ZIP's sole
+`Loadbar.exe` entry matched the loose executable byte-for-byte. ZIP SHA-256:
+`0FFCE78D275CF6D4A38E990DF79A06CC1FA60ADE9A94ECEA344BA028FF6E2197`.
+
+Version 1.1.0 is published at [Vorta/Loadbar](https://github.com/Vorta/Loadbar/releases/tag/v1.1.0).
+Release notes are in [releases/1.1.0.md](releases/1.1.0.md). Publication was explicitly requested;
+clean-machine packaging and the live/performance release gates remain pending.
+
+## Published 1.0.0 artifact
 
 Version **1.0.0**, author **Vorta**, built on 2026-10-08:
-`out/build/windows-x64-release/Loadbar.exe`, **1,040,384 bytes**.
+The build output at publication was **1,040,384 bytes**; the current local build path
+now contains 1.1.0.
 
 SHA-256: `7FB28EBFDBBA2F206DFD8B7A1327F0367C1D251402A9B1F4BCD5671E1DE4BB7B`.
 

@@ -226,3 +226,24 @@ changes still reach details/tooltips even when identical visible retained readin
 Deadline-based staleness preserves the strict existing threshold; retained-age text refreshes
 only when there is a visible consumer. These are implementation properties, not counter-accuracy
 or performance measurements. See testing.md for the post-change provider smoke runs.
+
+## Hidden GPU and network widgets
+
+Hide pauses collection for that family: GPU PDH queries close, and the NIC is not read.
+The 30-second device catalog refresh continues so Settings remains useful. Device preferences,
+last-valid readings and rate peaks remain in memory; visibility is persisted separately.
+Showing a family re-primes only its counters, including rapid hide/show changes coalesced
+before collection. CPU/RAM/disks and the other visible family keep collecting normally.
+Settings reports “Hidden — sampling paused”; hidden metrics do not schedule freshness paints.
+
+## Hidden physical drives
+
+Settings stores explicit hidden stable IDs, never a whitelist of known drives. Collection still
+publishes those identities with “Hidden — sampling paused” and retains their last observations
+and session peaks. Shared wildcard disk queries continue while at least one disk is visible;
+hidden rows are ignored during interpretation, so their values and peaks do not advance.
+When all detected drives are hidden, both disk queries close and skip collection. Showing a
+drive then opens fresh queries and primes them; toggling one drive while others remain visible
+does not reset shared counters. Discovery continues while hidden. New identities automatically
+collect and display; a reconnected excluded identity remains hidden even if its disk number changes.
+The empty-discovery unavailable widget is distinct from an inventory whose disks are all hidden.

@@ -27,6 +27,9 @@ std::optional<Settings> settings_from_draft(const SettingsDraft &draft) {
     result.monitor_id = draft.device_ids[0];
     result.gpu_id = draft.device_ids[1];
     result.network_id = draft.device_ids[2];
+    result.gpu_visible = draft.gpu_visible;
+    result.network_visible = draft.network_visible;
+    result.hidden_disks = draft.hidden_disks;
     result.edge = static_cast<Edge>(draft.edge);
     result.alignment = static_cast<Alignment>(draft.alignment);
     result.thickness = *thickness;
@@ -38,7 +41,8 @@ bool settings_dirty(const SettingsDraft &draft, const Settings &applied) {
     return !desired || *desired != applied;
 }
 SettingsLayout settings_layout(int width, int height, float scale, bool retry, int scroll,
-                               int scrollbar_width, int status_height) {
+                               int scrollbar_width, int status_height, int drive_rows,
+                               int drive_row_height) {
     const auto px = [scale](int value) {
         return static_cast<int>(std::round(static_cast<float>(value) * scale));
     };
@@ -97,15 +101,23 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
     result.viewport = {0, 0, std::max(0, width), viewport_height};
     const bool stacked = content_width < px(500);
     const int row_height = px(stacked ? 54 : 30);
+    const int drive_height =
+        drive_rows > 0 ? std::clamp(drive_rows, 1, 4) * std::max(1, drive_row_height) + px(4) : 0;
+    const int drive_space = drive_rows > 0 ? drive_height + gap + (stacked ? px(24) : 0) : 0;
+    const int drive_y = margin + 3 * row_height;
+    result.drives_label = {margin, drive_y, stacked ? content_width - 2 * margin : px(166), px(24)};
+    const int drive_x = stacked ? margin : px(186);
+    result.drives = {drive_x, drive_y + (stacked ? px(24) : 0),
+                     std::max(1, content_width - drive_x - margin), drive_height};
     for (std::size_t i = 0; i < result.fields.size(); ++i) {
-        const int y = margin + static_cast<int>(i) * row_height;
+        const int y = margin + static_cast<int>(i) * row_height + (i >= 3 ? drive_space : 0);
         result.labels[i] = {margin, y + (stacked ? 0 : px(2)),
                             stacked ? content_width - 2 * margin : px(166), px(24)};
         const int x = stacked ? margin : px(186);
         result.fields[i] = {x, y + (stacked ? px(24) : 0), std::max(1, content_width - x - margin),
                             px(25)};
     }
-    const int form_bottom = margin + 7 * row_height + gap;
+    const int form_bottom = margin + 7 * row_height + gap + drive_space;
     const int table_width = std::max(1, content_width - 2 * margin);
     result.readings_label = {margin, form_bottom, table_width, px(stacked ? 42 : 26)};
     const int table_y = result.readings_label.y + result.readings_label.height;
@@ -131,6 +143,8 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
     for (auto &control : result.fields) {
         control.y -= result.scroll;
     }
+    result.drives_label.y -= result.scroll;
+    result.drives.y -= result.scroll;
     result.readings_label.y -= result.scroll;
     result.readings.y -= result.scroll;
     result.metric_width = std::min(px(180), result.readings.width / 2);

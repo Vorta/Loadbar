@@ -184,7 +184,8 @@ Collector::Collector(SessionPeaks &peaks, DiskInventory &disks, CpuSamples &proc
       gpu_engines_({L"\\GPU Engine(*)\\Utilization Percentage"}, Unit::percent),
       gpu_memory_({L"\\GPU Adapter Memory(*)\\Dedicated Usage"}, Unit::bytes),
       gpu_shared_({L"\\GPU Adapter Memory(*)\\Shared Usage"}, Unit::bytes) {}
-void Collector::configure(const Settings &settings, bool reset) {
+void Collector::configure(const Settings &settings, bool reset, bool reset_gpu,
+                          bool reset_network) {
     auto discovery = discover_ ? discover_() : discover_devices();
     auto &catalog = discovery.catalog;
     const bool disk_recovered = disk_discovery_error_ && !discovery.disk_error;
@@ -216,21 +217,29 @@ void Collector::configure(const Settings &settings, bool reset) {
         // unchanged: previously counter-only identities no longer present can be pruned.
         cpu_samples_.configure(catalog.processors);
     }
-    if (reset || disk_recovered || catalog.disks != catalog_.disks) {
+    const bool disk_sampling = std::ranges::any_of(
+        catalog.disks, [&](const auto &disk) { return disk_visible(disk.id, settings); });
+    if (reset || disk_recovered || catalog.disks != catalog_.disks ||
+        disk_sampling != disk_sampling_) {
         disk_io_.reset();
         disk_idle_.reset();
     }
-    if (reset || network != network_) {
+    if (reset || reset_network || network != network_ ||
+        settings.network_visible != network_visible_) {
         network_provider_.reset();
     }
-    if (reset || gpu != gpu_) {
+    if (reset || reset_gpu || gpu != gpu_ || settings.gpu_visible != gpu_visible_) {
         gpu_engines_.reset();
         gpu_memory_.reset();
         gpu_shared_.reset();
     }
+    hidden_disks_ = settings.hidden_disks;
+    disk_sampling_ = disk_sampling;
     catalog_ = std::move(catalog);
     network_ = network;
     gpu_ = gpu;
+    network_visible_ = settings.network_visible;
+    gpu_visible_ = settings.gpu_visible;
 }
 void Collector::cpu(Snapshot &snapshot, Clock::time_point now) {
     auto values = cpu_.sample(now);
@@ -248,16 +257,26 @@ void Collector::cpu(Snapshot &snapshot, Clock::time_point now) {
 template <class ReadIo, class ReadIdle>
 void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
                        Clock::time_point now, const ReadIo &read_io, const ReadIdle &read_idle,
-                       const Error *discovery_error = nullptr) {
+                       const Error *discovery_error, const HiddenDiskIds &hidden_disks) {
     snapshot.disks.clear();
     snapshot.disks.reserve(devices.size());
     for (const auto &device : devices) {
         snapshot.disks.push_back({device.id, device.label});
+        if (disk_hidden(hidden_disks, device.id)) {
+            auto &reading = snapshot.disks.back();
+            reading.active = unavailable(now, Unit::percent, L"Hidden — sampling paused");
+            reading.active.identity = device.id;
+            reading.read = reading.write = reading.active;
+            reading.read.unit = reading.write.unit = Unit::bytes_per_second;
+        }
     }
     if (discovery_error) {
         snapshot.disk_discovery = {
             0, Status::error, Unit::percent, now, {}, error_text(*discovery_error)};
         for (auto &reading : snapshot.disks) {
+            if (disk_hidden(hidden_disks, reading.id)) {
+                continue;
+            }
             reading.active = snapshot.disk_discovery;
             reading.active.identity = reading.id;
             reading.read = reading.write = reading.active;
@@ -269,6 +288,10 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
     }
     snapshot.disk_discovery = {0,  Status::unavailable,           Unit::percent, now,
                                {}, L"No physical disk discovered"};
+    if (std::ranges::none_of(
+            devices, [&](const auto &device) { return !disk_hidden(hidden_disks, device.id); })) {
+        return;
+    }
     try {
         auto values = read_io();
         if (values && values->size() != 2) {
@@ -276,6 +299,9 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
         }
         for (std::size_t i = 0; i < snapshot.disks.size(); ++i) {
             auto &reading = snapshot.disks[i];
+            if (disk_hidden(hidden_disks, reading.id)) {
+                continue;
+            }
             const auto &device = devices[i];
             reading.read = values ? disk_counter((*values)[0], device, now)
                                   : failed(now, Unit::bytes_per_second, values.error());
@@ -285,6 +311,9 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
         }
     } catch (...) {
         for (auto &reading : snapshot.disks) {
+            if (disk_hidden(hidden_disks, reading.id)) {
+                continue;
+            }
             reading.read = reading.write =
                 failed(now, Unit::bytes_per_second,
                        {L"Disk provider exception", ERROR_UNHANDLED_EXCEPTION});
@@ -299,6 +328,9 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
         }
         for (std::size_t i = 0; i < snapshot.disks.size(); ++i) {
             auto &reading = snapshot.disks[i];
+            if (disk_hidden(hidden_disks, reading.id)) {
+                continue;
+            }
             reading.active =
                 values
                     ? disk_active_time(disk_counter((*values)[0], devices[i], now, Unit::percent))
@@ -307,6 +339,9 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
         }
     } catch (...) {
         for (auto &reading : snapshot.disks) {
+            if (disk_hidden(hidden_disks, reading.id)) {
+                continue;
+            }
             reading.active = failed(now, Unit::percent,
                                     {L"Disk idle provider exception", ERROR_UNHANDLED_EXCEPTION});
             reading.active.identity = reading.id;
@@ -315,16 +350,25 @@ void collect_disk_impl(Snapshot &snapshot, const std::vector<Device> &devices,
 }
 void collect_disk_readings(Snapshot &snapshot, const std::vector<Device> &devices,
                            Clock::time_point now, const DiskCounterRead &read_io,
-                           const DiskCounterRead &read_idle, const Error *discovery_error) {
-    collect_disk_impl(snapshot, devices, now, read_io, read_idle, discovery_error);
+                           const DiskCounterRead &read_idle, const Error *discovery_error,
+                           const HiddenDiskIds &hidden_disks) {
+    collect_disk_impl(snapshot, devices, now, read_io, read_idle, discovery_error, hidden_disks);
 }
 void Collector::disk(Snapshot &snapshot, Clock::time_point now) {
     collect_disk_impl(
         snapshot, catalog_.disks, now, [&] { return disk_io_.sample(now); },
         [&] { return disk_idle_.sample(now); },
-        disk_discovery_error_ ? &*disk_discovery_error_ : nullptr);
+        disk_discovery_error_ ? &*disk_discovery_error_ : nullptr, hidden_disks_);
 }
 void Collector::network(Snapshot &snapshot, Clock::time_point now) {
+    if (!network_visible_) {
+        snapshot.network_id = network_ ? network_->id : L"";
+        snapshot.network_label = network_ ? network_->label : L"Network";
+        for (auto kind : {Gauge::download, Gauge::upload}) {
+            gauge(snapshot, kind) = unavailable(now, gauge_unit(kind), L"Hidden — sampling paused");
+        }
+        return;
+    }
     if (!network_) {
         for (auto kind : {Gauge::download, Gauge::upload}) {
             gauge(snapshot, kind) = unavailable(
@@ -408,6 +452,19 @@ void collect_gpu_readings(Snapshot &snapshot, const Device &device, Clock::time_
     collect_gpu_impl(snapshot, device, now, read_engines, read_dedicated, read_shared, cache);
 }
 void Collector::gpu(Snapshot &snapshot, Clock::time_point now) {
+    if (!gpu_visible_) {
+        snapshot.gpu_id = gpu_ ? gpu_->id : L"";
+        snapshot.gpu_label = gpu_ ? gpu_->label : L"GPU";
+        if (gpu_) {
+            snapshot.gpu_memory_label = gpu_->integrated ? L"GPU shared" : L"GPU VRAM";
+            snapshot.gpu_memory_capacity =
+                gpu_->integrated ? gpu_->shared_capacity : gpu_->capacity;
+        }
+        for (auto kind : {Gauge::gpu_3d, Gauge::gpu_decode, Gauge::gpu_memory}) {
+            gauge(snapshot, kind) = unavailable(now, gauge_unit(kind), L"Hidden — sampling paused");
+        }
+        return;
+    }
     if (gpu_) {
         collect_gpu_impl(
             snapshot, *gpu_, now, [&] { return gpu_engines_.sample(now); },
@@ -485,11 +542,22 @@ SamplingWorker::SamplingWorker(HWND target, UINT message, Latest<Delivery> &dest
 SamplingWorker::~SamplingWorker() {
     stop();
 }
-void SamplingWorker::configure(Settings settings, bool paused) {
+void SamplingWorker::configure(Settings settings, bool paused, bool reset) {
     {
         std::lock_guard lock(mutex_);
+        // Preserve family resets even if several UI changes coalesce before collection.
+        if (settings.gpu_id != settings_.gpu_id || settings.gpu_visible != settings_.gpu_visible) {
+            ++gpu_generation_;
+        }
+        if (settings.network_id != settings_.network_id ||
+            settings.network_visible != settings_.network_visible) {
+            ++network_generation_;
+        }
         settings_ = std::move(settings);
         paused_ = paused;
+        if (reset) {
+            ++reset_generation_;
+        }
         ++generation_;
     }
     changed_.notify_all();
@@ -505,11 +573,11 @@ void SamplingWorker::run(const std::stop_token &token) noexcept {
     const auto initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     try {
         Collector collector(peaks_, known_disks_, cpu_samples_);
-        std::uint64_t applied{};
+        std::uint64_t applied{}, applied_reset{}, applied_gpu{}, applied_network{};
         std::shared_ptr<const Catalog> catalog;
         auto next_discovery = Clock::time_point{};
         Settings settings;
-        std::uint64_t generation{};
+        std::uint64_t generation{}, reset_generation{}, gpu_generation{}, network_generation{};
         bool copied_settings{};
         while (!token.stop_requested()) {
             {
@@ -521,12 +589,20 @@ void SamplingWorker::run(const std::stop_token &token) noexcept {
                 if (!copied_settings || generation != generation_) {
                     settings = settings_;
                     generation = generation_;
+                    reset_generation = reset_generation_;
+                    gpu_generation = gpu_generation_;
+                    network_generation = network_generation_;
                     copied_settings = true;
                 }
             }
             const auto begin = Clock::now();
             if (applied != generation || begin >= next_discovery) {
-                collector.configure(settings, applied != generation);
+                collector.configure(settings, applied_reset != reset_generation,
+                                    applied_gpu != gpu_generation,
+                                    applied_network != network_generation);
+                applied_gpu = gpu_generation;
+                applied_network = network_generation;
+                applied_reset = reset_generation;
                 applied = generation;
                 next_discovery = begin + std::chrono::seconds(30);
                 if (!catalog || !same_catalog(*catalog, collector.catalog())) {

@@ -160,8 +160,9 @@ void Application::place_bar() {
         }
         const auto edge = resolve_edge(settings_.edge, monitor.bounds);
         horizontal_ = horizontal(edge);
-        const auto rectangle = place_readable_bar(appbar_, monitor, settings_, snapshot_.processors,
-                                                  text_scale_, snapshot_.disks.size());
+        const auto rectangle =
+            place_readable_bar(appbar_, monitor, settings_, snapshot_.processors, text_scale_,
+                               disk_widget_count(snapshot_.disks, settings_));
         if (!rectangle) {
             throw std::runtime_error("AppBar could not negotiate a readable region");
         }
@@ -250,8 +251,8 @@ void Application::update_tooltip() {
     if (fallback_) {
         text += L"\nPreferred monitor unavailable — using primary monitor";
     }
-    auto expiry = next_retention_deadline(snapshot_, now, settings_.interval_ms);
-    const auto stale = next_stale_deadline(snapshot_, settings_.interval_ms);
+    auto expiry = next_retention_deadline(snapshot_, now, settings_.interval_ms, settings_);
+    const auto stale = next_stale_deadline(snapshot_, settings_.interval_ms, settings_);
     if (stale && *stale > now && (!expiry || *stale < *expiry)) {
         expiry = stale;
     }
@@ -276,13 +277,13 @@ void Application::schedule_refresh() {
         return;
     }
     const auto now = Clock::now();
-    auto deadline = next_stale_deadline(snapshot_, settings_.interval_ms);
+    auto deadline = next_stale_deadline(snapshot_, settings_.interval_ms, settings_);
     // Age text needs ticks only while it can be read. Valid sampling needs no independent
     // periodic UI wakeups; each accepted sample moves the stale deadline forward.
     if (!paused_ &&
         ((hovered_ && IsWindowVisible(window_)) ||
          (settings_window_ && IsWindowVisible(settings_window_) && !IsIconic(settings_window_)))) {
-        const auto age = next_retention_deadline(snapshot_, now, settings_.interval_ms);
+        const auto age = next_retention_deadline(snapshot_, now, settings_.interval_ms, settings_);
         if (age && (!deadline || *age < *deadline)) {
             deadline = age;
         }
@@ -405,7 +406,8 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
     if (window == settings_content_ || window == settings_window_) {
         if (message_id == WM_CTLCOLORSTATIC) {
             const int id = GetDlgCtrlID(message_pointer<HWND>(lparam));
-            if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus) {
+            if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus ||
+                id == kDrivesLabel) {
                 const auto dc = message_pointer<HDC>(wparam);
                 if (SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT)) != CLR_INVALID &&
                     SetBkMode(dc, TRANSPARENT) != 0) {
@@ -626,6 +628,14 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             layout_settings();
             return 0;
         }
+        if (message_id == WM_NOTIFY && message_pointer<NMHDR *>(lparam)->idFrom == kDrivesControl &&
+            message_pointer<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {
+            const auto *change = message_pointer<NMLISTVIEW *>(lparam);
+            if ((change->uChanged & LVIF_STATE) != 0 &&
+                ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) != 0) {
+                drive_check_changed(change->iItem);
+            }
+        }
         if (message_id == WM_NOTIFY && message_pointer<NMHDR *>(lparam)->code == NM_SETFOCUS) {
             ensure_visible(message_pointer<NMHDR *>(lparam)->hwndFrom);
         }
@@ -666,7 +676,8 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
                 update_settings_status();
             }
             const bool changed_topology =
-                snapshot_.disks.size() != update->snapshot.disks.size() ||
+                disk_widget_count(snapshot_.disks, settings_) !=
+                    disk_widget_count(update->snapshot.disks, settings_) ||
                 !std::ranges::equal(snapshot_.processors, update->snapshot.processors,
                                     [](const Processor &a, const Processor &b) {
                                         return a.id == b.id && a.core == b.core &&
@@ -692,8 +703,9 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
                     populate_devices(false);
                 }
                 if (!selection_prompted_ &&
-                    (!select_device(catalog_->gpus, settings_.gpu_id) ||
-                     !select_device(catalog_->networks, settings_.network_id))) {
+                    ((settings_.gpu_visible && !select_device(catalog_->gpus, settings_.gpu_id)) ||
+                     (settings_.network_visible &&
+                      !select_device(catalog_->networks, settings_.network_id)))) {
                     selection_prompted_ = true;
                     show_settings(false);
                 }
@@ -723,7 +735,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
         } else if (wparam == 1) {
             KillTimer(window_, 1);
             refresh_deadline_.reset();
-            if (expire_snapshot(snapshot_, Clock::now(), settings_.interval_ms)) {
+            if (expire_snapshot(snapshot_, Clock::now(), settings_.interval_ms, settings_)) {
                 ++observation_revision_;
                 if (!paused_ && IsWindowVisible(window_)) {
                     InvalidateRect(window_, nullptr, FALSE);

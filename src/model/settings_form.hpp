@@ -10,6 +10,8 @@ struct SettingsDraft {
     int edge{}, alignment{};
     std::wstring thickness, interval;
     bool selections_valid{true};
+    bool gpu_visible{true}, network_visible{true};
+    HiddenDiskIds hidden_disks;
 };
 [[nodiscard]] std::optional<Settings> settings_from_draft(const SettingsDraft &draft);
 [[nodiscard]] bool settings_dirty(const SettingsDraft &draft, const Settings &applied);
@@ -30,12 +32,12 @@ struct SettingsLayout {
     ControlBounds viewport;
     std::array<ControlBounds, 7> labels, fields;
     std::array<ControlBounds, 4> buttons;
-    ControlBounds footer_status, readings_label, readings;
+    ControlBounds footer_status, readings_label, readings, drives_label, drives;
     int content_height{}, scroll{}, metric_width{};
     bool scroll_footer{};
 };
 // All outputs are physical client pixels. Content coordinates include the scroll offset.
 [[nodiscard]] SettingsLayout settings_layout(int width, int height, float scale, bool retry,
-                                             int scroll, int scrollbar_width,
-                                             int status_height = 0);
+                                             int scroll, int scrollbar_width, int status_height = 0,
+                                             int drive_rows = 0, int drive_row_height = 0);
 } // namespace loadbar

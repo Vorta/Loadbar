@@ -106,6 +106,12 @@ Geometry icon_geometry(ID2D1Factory *factory, unsigned icon) {
     return result;
 }
 } // namespace
+bool Renderer::disk_layout_changed(const Snapshot &snapshot, const Settings &settings) const {
+    return !std::ranges::equal(
+        snapshot.disks, layout_disks_, [&](const auto &disk, const auto &cached) {
+            return disk.id == cached.first && disk_visible(disk.id, settings) == cached.second;
+        });
+}
 void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
                                   const Settings &settings) const {
     const bool topology_changed = !std::ranges::equal(
@@ -113,13 +119,16 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
             return a.id == b.id && a.core == b.core && a.mapped == b.mapped &&
                    a.efficiency_class == b.efficiency_class;
         });
-    if (!target_ || !layout_.fits || topology_changed ||
+    if (!target_ || !layout_.fits || topology_changed || disk_layout_changed(next, settings) ||
+        layout_gpu_visible_ != settings.gpu_visible ||
+        layout_network_visible_ != settings.network_visible ||
         !std::ranges::equal(previous.disks, next.disks,
                             [](const DiskReading &a, const DiskReading &b) {
                                 return a.id == b.id && a.label == b.label;
                             }) ||
-        previous.gpu_label != next.gpu_label || previous.network_label != next.network_label ||
-        previous.gpu_memory_label != next.gpu_memory_label) {
+        (settings.gpu_visible && (previous.gpu_label != next.gpu_label ||
+                                  previous.gpu_memory_label != next.gpu_memory_label)) ||
+        (settings.network_visible && previous.network_label != next.network_label)) {
         InvalidateRect(window, nullptr, FALSE);
         return;
     }
@@ -143,8 +152,12 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
     }
     changed[1] = changed[1] || previous.ram_total_bytes != next.ram_total_bytes ||
                  differs(previous.ram_used_bytes, next.ram_used_bytes);
-    changed[2] = changed[2] || differs(previous.gpu_memory_bytes, next.gpu_memory_bytes) ||
-                 previous.gpu_memory_capacity != next.gpu_memory_capacity;
+    for (std::size_t b = 0; b < layout_.blocks.size(); ++b) {
+        if (layout_.blocks[b].kind == 2) {
+            changed[b] = changed[b] || differs(previous.gpu_memory_bytes, next.gpu_memory_bytes) ||
+                         previous.gpu_memory_capacity != next.gpu_memory_capacity;
+        }
+    }
     const float dpi_scale = static_cast<float>(GetDpiForWindow(window)) / 96;
     // Include the whole dependent overlay and three-sigma glow; Windows coalesces these regions.
     for (std::size_t block = 0; block < changed.size(); ++block) {
@@ -549,13 +562,19 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             snapshot.processors, topology_, [](const Processor &p, const auto &cached) {
                 return std::tie(p.core, p.id, p.mapped, p.efficiency_class) == cached;
             });
-        if (snapshot.disks.size() != layout_disk_count_ || topology_changed ||
+        if (disk_layout_changed(snapshot, settings) || topology_changed ||
             size.width != layout_width_ || size.height != layout_height_ ||
             scale != layout_scale_ || current_dpi != layout_dpi_ ||
-            horizontal != layout_horizontal_ || settings.alignment != layout_alignment_) {
-            layout_ = make_layout(size.width, size.height, horizontal, snapshot.processors, scale,
-                                  settings, snapshot.disks.size());
-            layout_disk_count_ = snapshot.disks.size();
+            horizontal != layout_horizontal_ || settings.alignment != layout_alignment_ ||
+            settings.gpu_visible != layout_gpu_visible_ ||
+            settings.network_visible != layout_network_visible_) {
+            layout_ = make_snapshot_layout(size.width, size.height, horizontal, snapshot, scale,
+                                           settings);
+            layout_disks_.clear();
+            layout_disks_.reserve(snapshot.disks.size());
+            for (const auto &disk : snapshot.disks) {
+                layout_disks_.emplace_back(disk.id, disk_visible(disk.id, settings));
+            }
             snap_layout(layout_, current_dpi);
             layout_dpi_ = current_dpi;
             topology_.clear();
@@ -568,6 +587,8 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             layout_scale_ = scale;
             layout_horizontal_ = horizontal;
             layout_alignment_ = settings.alignment;
+            layout_gpu_visible_ = settings.gpu_visible;
+            layout_network_visible_ = settings.network_visible;
             glows_.clear();
             text_cache_.clear();
             ++layout_revision_;

@@ -1,6 +1,47 @@
 # Testing and verification
 
-## Recorded validation
+## Drive visibility update
+
+The drive-checkbox implementation adds schema-9 exclusion persistence (including escaped IDs,
+maximum bounds and migration), hidden-provider continuity and query lifecycle tests, hidden
+freshness deadlines, dynamic disk-index/render-cache checks, and native checklist draft,
+keyboard, focus, scroll, empty-inventory and device-refresh coverage. The final builds passed
+all four suites: Debug 15.78 s, Release 3.95 s, RelWithDebInfo 3.95 s, ASan 30.93 s, with no
+reported sanitizer errors. All presets were configured using the pinned toolchain; subsequent
+fixes used incremental builds/tests. Format-check, full clang-tidy, MSVC analysis and
+`git diff --check` passed. After fixing the first review finding, two independent consecutive
+adversarial reviews were clean.
+
+Analysis findings were fixed without weakening checks: the second large discovery fixture
+moved to the heap; exclusion storage uses a sorted unique vector with allocation-free empty
+state and nonthrowing moves, avoiding the MSVC tree container's allocating move constructor.
+The first review found a meaningless checkbox could appear on the empty informational row;
+the list is now disabled while empty and re-enabled on discovery, with native regression tests.
+Live hot-plug, restart/persistence, Shell placement and accessibility acceptance remain pending.
+No live AppBar was launched and no user registry settings or Startup executable were changed.
+
+## Earlier 1.1.0 GPU/network and CPU verification
+
+On 2026-10-08, the unchanged pinned toolchain built Debug, Release, RelWithDebInfo and ASan.
+All four CTest suites passed in each configuration; ASan reported no memory errors.
+Final suite times were 15.76 s (Debug), 4.72 s (Release), 4.68 s (RelWithDebInfo), and
+29.88 s (ASan). `format-check`, full `tidy`, MSVC `analyze`, and `git diff --check` passed.
+Tidy findings in new test code (unsigned literals, reserved capacity, widened multiplication)
+were corrected before the final passing run. Two independent consecutive adversarial reviews
+were clean; scope and additional probes are recorded in [review.md](review.md).
+The configure/build/test commands are the four-preset loop below. No Loadbar instance was
+launched, replaced in Startup, or stopped; tests used hidden windows and offscreen rendering.
+
+Added regressions cover all GPU/network visibility combinations, schema-8 persistence and
+older-settings migration, hidden/disconnected draft choices, selective provider reset and
+last-value/peak retention, hidden freshness deadlines, uniform SMT/grouped CPU squares,
+DPI/text scaling, and cached-versus-fresh rendering after visibility changes.
+
+The requested four-core previews are `render-fixtures/uniform4-60-normal.png` and
+`render-fixtures/uniform4-60-hidden.png` under each build preset. They use the production
+renderer with synthetic readings at 1400 × 60 pixels, 96 DPI, no hover text.
+
+## Recorded 1.0.0 validation
 
 The 1.0.0 preparation on 2026-10-08 used the pinned [toolchain](toolchain.md).
 All four configurations built successfully and passed all four CTest suites:
@@ -110,6 +151,11 @@ separately before treating any reading as accurate.
 | Procedure | Expected observation |
 | --- | --- |
 | Maximize/Snap on three displays with taskbar/another AppBar | Only the selected monitor reserves the negotiated strip; no drift/overlap |
+| In Drives, uncheck one, Cancel, uncheck again and Apply; hide all, then show one | Checkbox draft/actions work; remaining widgets expand in both orientations; shared counters continue until all are hidden, then prime on showing |
+| With Settings open, connect a new physical disk; disconnect/reconnect an excluded disk; restart | New identity is checked; excluded identity stays unchecked; catalog refresh preserves draft/focus/scroll; saved exclusions survive restart |
+| With no discovered disks, use Tab/Space and reconnect a disk | Informational row has no checkbox and is skipped by Tab; arrival re-enables checked rows |
+| Hide GPU, Network, then both; show each again and restart | Removed widgets free space; choices persist; hidden collection pauses; only shown family re-primes, preserving session peaks |
+| Uniform 4/8/many-core CPU, both orientations and text scaling | Equal square cells, single row when possible, wrapping with every core present |
 | Every edge, portrait rotation and thickness 40 → 60 → 80 → 40 | Full edge and all widgets remain visible; graphics scale until capped; explicit edge survives rotation |
 | Another AppBar shortens/lengthens the edge with unchanged readings | Immediate reflow and recomputed minimum independent of new telemetry |
 | 100/125/150/200% DPI, text scale, light/dark high contrast | Consistent reservation/content; distinguishable CPU load; controls and tooltips readable |

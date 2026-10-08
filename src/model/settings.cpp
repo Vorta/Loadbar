@@ -8,9 +8,29 @@
 #include <sstream>
 
 namespace loadbar {
+bool disk_hidden(const HiddenDiskIds &ids, std::wstring_view id) noexcept {
+    return std::ranges::binary_search(ids, id);
+}
+bool hide_disk(HiddenDiskIds &ids, std::wstring id) {
+    const auto at = std::ranges::lower_bound(ids, id);
+    if (at != ids.end() && *at == id) {
+        return false;
+    }
+    ids.insert(at, std::move(id));
+    return true;
+}
+void show_disk(HiddenDiskIds &ids, std::wstring_view id) {
+    const auto at = std::ranges::lower_bound(ids, id);
+    if (at != ids.end() && *at == id) {
+        ids.erase(at);
+    }
+}
+
 bool collection_changed(const Settings &before, const Settings &after) {
     return before.gpu_id != after.gpu_id || before.network_id != after.network_id ||
-           before.interval_ms != after.interval_ms;
+           before.interval_ms != after.interval_ms || before.gpu_visible != after.gpu_visible ||
+           before.network_visible != after.network_visible ||
+           before.hidden_disks != after.hidden_disks;
 }
 bool valid_settings(const Settings &settings) {
     const auto valid_id = [](const std::wstring &id) {
@@ -25,38 +45,31 @@ bool valid_settings(const Settings &settings) {
              *settings.legacy_percent <= 25)) &&
            settings.interval_ms >= 250 && settings.interval_ms <= 5000 &&
            settings.alignment <= Alignment::end && valid_id(settings.monitor_id) &&
-           valid_id(settings.gpu_id) && valid_id(settings.network_id);
+           valid_id(settings.gpu_id) && valid_id(settings.network_id) &&
+           settings.hidden_disks.size() <= kMaximumHiddenDisks &&
+           std::ranges::is_sorted(settings.hidden_disks) &&
+           std::ranges::adjacent_find(settings.hidden_disks) == settings.hidden_disks.end() &&
+           std::ranges::all_of(settings.hidden_disks,
+                               [&](const auto &id) { return !id.empty() && valid_id(id); });
 }
 std::wstring encode_settings(const Settings &settings) {
     std::wostringstream stream;
     stream.imbue(std::locale::classic());
-    // Preserve an unresolved legacy record if a caller saves before monitor discovery.
-    // Normal commits resolve it first and write v7 without retired appearance/rate options.
-    stream << (settings.legacy_percent ? L"Loadbar 2 " : L"Loadbar 7 ")
-           << static_cast<unsigned>(settings.edge) << L' ' << std::setprecision(17);
-    if (settings.legacy_percent) {
-        stream << L"0 " << *settings.legacy_percent;
-    } else {
-        stream << settings.thickness;
-    }
-    stream << L' ' << settings.interval_ms;
-    if (settings.legacy_percent) {
-        // Syntactically valid retired ceilings for the compatibility record only.
-        stream << L" 1073741824 1073741824 131072000 131072000";
-    }
-    stream << L' ' << std::quoted(settings.monitor_id);
-    if (settings.legacy_percent) {
-        stream << L" \"\"";
-    }
-    stream << L' ' << std::quoted(settings.gpu_id) << L' ' << std::quoted(settings.network_id)
-           << L' ' << static_cast<unsigned>(settings.alignment);
-    if (settings.legacy_percent) {
-        stream << L" 0 0 0 0";
+    // v9 persists only explicit disk exclusions; unknown identities remain visible.
+    stream << L"Loadbar 9 " << static_cast<unsigned>(settings.edge) << L' ' << std::setprecision(17)
+           << settings.thickness << L' ' << settings.interval_ms << L' '
+           << std::quoted(settings.monitor_id) << L' ' << std::quoted(settings.gpu_id) << L' '
+           << std::quoted(settings.network_id) << L' ' << static_cast<unsigned>(settings.alignment)
+           << L' ' << settings.gpu_visible << L' ' << settings.network_visible << L' '
+           << settings.legacy_percent.value_or(0);
+    stream << L' ' << settings.hidden_disks.size();
+    for (const auto &id : settings.hidden_disks) {
+        stream << L' ' << std::quoted(id);
     }
     return stream.str();
 }
 std::optional<Settings> decode_settings(std::wstring_view text) {
-    if (text.size() > 8192) {
+    if (text.size() > kMaximumSettingsCharacters) {
         return std::nullopt;
     }
     std::wistringstream stream{std::wstring(text)};
@@ -65,7 +78,7 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
     std::wstring name;
     unsigned version{}, edge{}, mode{}, scale{};
     stream >> name >> version >> edge;
-    if (!stream || name != L"Loadbar" || version < 1 || version > 7 || edge > 4) {
+    if (!stream || name != L"Loadbar" || version < 1 || version > 9 || edge > 4) {
         return std::nullopt;
     }
     if (version < 3) {
@@ -106,6 +119,35 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
         }
         result.alignment = static_cast<Alignment>(alignment);
         // Validated old appearance preferences are deliberately retired.
+    }
+    if (version >= 8) {
+        unsigned gpu_visible{}, network_visible{};
+        double legacy_percent{};
+        stream >> gpu_visible >> network_visible >> legacy_percent;
+        if (!stream || gpu_visible > 1 || network_visible > 1 || !std::isfinite(legacy_percent) ||
+            (legacy_percent != 0 && (legacy_percent < 1 || legacy_percent > 25))) {
+            return std::nullopt;
+        }
+        result.gpu_visible = gpu_visible != 0;
+        result.network_visible = network_visible != 0;
+        if (legacy_percent != 0) {
+            result.legacy_percent = legacy_percent;
+        }
+    }
+    if (version >= 9) {
+        std::size_t count{};
+        stream >> count;
+        if (!stream || count > kMaximumHiddenDisks) {
+            return std::nullopt;
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            std::wstring id;
+            stream >> std::quoted(id);
+            if (!stream || id.empty() || id.size() > 1024 ||
+                !hide_disk(result.hidden_disks, std::move(id))) {
+                return std::nullopt;
+            }
+        }
     }
     // Validate old records before retiring ceilings/log mode. No old peak is inferred.
     if (version < 4 && !std::ranges::all_of(

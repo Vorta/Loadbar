@@ -11,5 +11,7 @@ inline constexpr int kCancelSettings = 111;
 inline constexpr int kFirstField = 1000;
 inline constexpr int kFooterStatus = 1020;
 inline constexpr int kDetailsControl = 1021;
+inline constexpr int kDrivesControl = 1022;
+inline constexpr int kDrivesLabel = 2008;
 inline constexpr int kFirstLabel = 2000;
 } // namespace loadbar

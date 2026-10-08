@@ -136,7 +136,8 @@ Settings load_settings() {
     DWORD bytes{}, type{};
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Loadbar", L"Settings", RRF_RT_REG_SZ, &type,
                      nullptr, &bytes) != ERROR_SUCCESS ||
-        bytes < sizeof(wchar_t) || bytes > 16386 || bytes % sizeof(wchar_t) != 0) {
+        bytes < sizeof(wchar_t) || bytes > (kMaximumSettingsCharacters + 1) * sizeof(wchar_t) ||
+        bytes % sizeof(wchar_t) != 0) {
         return {};
     }
     std::wstring buffer(bytes / sizeof(wchar_t), L'\0');
@@ -162,6 +163,9 @@ Result<void> save_settings(const Settings &settings) {
         return std::unexpected(Error{L"Open settings", static_cast<DWORD>(code)});
     }
     const auto text = encode_settings(settings);
+    if (text.size() > kMaximumSettingsCharacters) {
+        return std::unexpected(Error{L"Settings size", ERROR_INVALID_DATA});
+    }
     code = RegSetValueExW(key.value, L"Settings", 0, REG_SZ,
                           reinterpret_cast<const BYTE *>(text.c_str()),
                           static_cast<DWORD>((text.size() + 1) * sizeof(wchar_t)));

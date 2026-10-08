@@ -16,6 +16,63 @@ void check(bool condition, const char *reason) {
         throw std::runtime_error(reason);
     }
 }
+void drive_settings_tests() {
+    using namespace loadbar;
+    Settings settings;
+    check(settings.hidden_disks.empty() && disk_visible(L"new", settings), "New disks are visible");
+    settings.hidden_disks = {L"device\\quoted\"id", L"disconnected"};
+    check(decode_settings(encode_settings(settings)) == settings, "Disk exclusions roundtrip");
+    Settings ordered;
+    check(hide_disk(ordered.hidden_disks, L"b") && hide_disk(ordered.hidden_disks, L"a") &&
+              !hide_disk(ordered.hidden_disks, L"b") &&
+              ordered.hidden_disks == HiddenDiskIds{L"a", L"b"},
+          "Checkbox order cannot create duplicate or noncanonical exclusions");
+    show_disk(ordered.hidden_disks, L"a");
+    show_disk(ordered.hidden_disks, L"absent");
+    check(ordered.hidden_disks == HiddenDiskIds{L"b"}, "Show removes only the matching identity");
+    ordered.hidden_disks = {L"b", L"a"};
+    check(!valid_settings(ordered), "Noncanonical internal exclusions are rejected");
+    ordered.hidden_disks = {L"a", L"a"};
+    check(!valid_settings(ordered), "Duplicate internal exclusions are rejected");
+    const auto old = decode_settings(L"Loadbar 8 0 40 1000 \"\" \"gpu\" \"nic\" 0 0 1 0");
+    check(old && old->hidden_disks.empty() && !old->gpu_visible && old->network_visible,
+          "Schema eight preserves GPU visibility and shows all disks");
+    const std::wstring prefix = L"Loadbar 9 0 40 1000 \"\" \"\" \"\" 0 1 1 0 ";
+    for (const auto *tail :
+         {L"1", L"1 \"\"", L"2 \"a\" \"a\"", L"1025", L"-1", L"1 \"a\n\"", L"1 \"a\" extra"}) {
+        check(!decode_settings(prefix + tail), "Malformed disk exclusions are rejected");
+    }
+    check(!decode_settings(prefix + L"1 \"" + std::wstring(1025, L'x') + L"\""),
+          "Oversized disk identity rejected");
+    settings.hidden_disks.clear();
+    for (std::size_t i = 0; i < kMaximumHiddenDisks; ++i) {
+        auto id = std::to_wstring(i);
+        id.append(1024 - id.size(), L'\\');
+        hide_disk(settings.hidden_disks, std::move(id));
+    }
+    const auto encoded = encode_settings(settings);
+    check(valid_settings(settings) && encoded.size() > 8192 &&
+              encoded.size() <= kMaximumSettingsCharacters && decode_settings(encoded) == settings,
+          "Maximum escaped hidden identities fit the coordinated persistence limit");
+    hide_disk(settings.hidden_disks, L"overflow");
+    check(!valid_settings(settings), "Hidden identity count bounded");
+    check(!decode_settings(std::wstring(kMaximumSettingsCharacters + 1, L' ')),
+          "Oversized settings rejected before parsing");
+    for (const float scale : {1.0F, 1.25F, 2.0F, 4.0F}) {
+        for (const int width : {320, 800}) {
+            const auto row = static_cast<int>(20 * scale);
+            for (const int count : {1, 2, 4, 12}) {
+                const auto layout = settings_layout(width, 700, scale, false, 0, 17, 0, count, row);
+                check(layout.drives.y >= layout.fields[2].y + layout.fields[2].height &&
+                          layout.drives.y + layout.drives.height <= layout.labels[3].y &&
+                          layout.drives.height ==
+                              std::min(count, 4) * row + static_cast<int>(std::round(4 * scale)),
+                      "Drive section fits between Network and Edge with four-row cap");
+            }
+        }
+    }
+}
+
 void geometry_tests() {
     using namespace loadbar;
     for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F, 4.0F}) {
@@ -111,7 +168,7 @@ void migration_tests() {
         Settings settings;
         settings.thickness = value;
         check(valid_settings(settings) && decode_settings(encode_settings(settings)) == settings &&
-                  encode_settings(settings).starts_with(L"Loadbar 7 "),
+                  encode_settings(settings).starts_with(L"Loadbar 9 "),
               "Schema 7 boundaries round trip");
     }
     for (const int version : {1, 2, 3, 4, 5, 6, 7}) {
@@ -169,7 +226,7 @@ void migration_tests() {
     Settings fractional;
     fractional.thickness = 40.25;
     check(!valid_settings(fractional), "New settings reject fractional DIPs");
-    check(!decode_settings(L"Loadbar 8 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
+    check(!decode_settings(L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
 }
 void draft_tests() {
     using namespace loadbar;
@@ -393,6 +450,137 @@ struct SettingsWindowTests {
                 app.cancel_settings();
                 check(!enabled(kApplySettings), "Cancel disables Apply");
             }
+
+            for (const int index : {1, 2}) {
+                wchar_t text[16]{};
+                SendMessageW(field(index), CB_GETLBTEXT, 1, reinterpret_cast<LPARAM>(text));
+                check(std::wstring_view(text) == L"Hide", "GPU and Network offer Hide");
+                const auto select = [&](int row) {
+                    SendMessageW(field(index), CB_SETCURSEL, static_cast<WPARAM>(row), 0);
+                    SendMessageW(app.settings_content_, WM_COMMAND,
+                                 MAKEWPARAM(kFirstField + index, CBN_SELCHANGE),
+                                 reinterpret_cast<LPARAM>(field(index)));
+                };
+                app.choice_ids_[static_cast<std::size_t>(index)].push_back(L"remembered-device");
+                const auto row = SendMessageW(field(index), CB_ADDSTRING, 0,
+                                              reinterpret_cast<LPARAM>(L"Remembered device"));
+                select(static_cast<int>(row));
+                select(1);
+                auto hidden = settings_from_draft(app.settings_draft());
+                check(hidden && (index == 1 ? !hidden->gpu_visible : !hidden->network_visible) &&
+                          (index == 1 ? hidden->gpu_id : hidden->network_id) ==
+                              L"remembered-device",
+                      "Selecting Hide retains the most recent draft device identity");
+                app.populate_devices(false);
+                check(settings_from_draft(app.settings_draft()) == hidden,
+                      "Rediscovery preserves hidden disconnected draft selection");
+                // Simulate the successful commit/reopen path without touching the registry or
+                // Shell.
+                const auto applied_before_hide = app.settings_;
+                app.settings_ = *hidden;
+                app.populate_settings();
+                check(!app.settings_dirty_ && SendMessageW(field(index), CB_GETCURSEL, 0, 0) == 1 &&
+                          settings_from_draft(app.settings_draft()) == hidden,
+                      "Committed Hide reopens cleanly with identity retained");
+                app.settings_ = applied_before_hide;
+                app.cancel_settings();
+                check(!app.settings_dirty_, "Cancel restores committed visible selection");
+            }
+
+            {
+                const auto original_catalog = app.catalog_;
+                const auto original_settings = app.settings_;
+                auto catalog = std::make_shared<Catalog>(*original_catalog);
+                catalog->disks = {{DeviceKind::disk, L"drive-a", L"Physical drive A", 0},
+                                  {DeviceKind::disk, L"drive-b", L"Physical drive B", 1}};
+                app.catalog_ = catalog;
+                app.populate_devices(false);
+                const auto list = GetDlgItem(app.settings_content_, kDrivesControl);
+                check(ListView_GetItemCount(list) == 2 && ListView_GetCheckState(list, 0) &&
+                          ListView_GetCheckState(list, 1) && !app.settings_dirty_,
+                      "New disks appear checked without making settings dirty");
+                check(GetNextDlgTabItem(app.settings_window_, field(2), FALSE) == list &&
+                          GetNextDlgTabItem(app.settings_window_, list, FALSE) == field(3),
+                      "Native drive checklist tab order is between Network and Edge");
+                RECT network{}, drives{}, edge{};
+                GetWindowRect(field(2), &network);
+                GetWindowRect(list, &drives);
+                GetWindowRect(field(3), &edge);
+                check(network.bottom <= drives.top && drives.bottom <= edge.top,
+                      "Native drive checklist occupies requested section");
+                ListView_SetCheckState(list, 0, FALSE);
+                check(app.settings_dirty_ && enabled(kApplySettings) && enabled(kCancelSettings) &&
+                          disk_hidden(app.settings_draft().hidden_disks, L"drive-a") &&
+                          app.settings_.hidden_disks.empty(),
+                      "Checkbox notifications update draft, not committed settings");
+                app.cancel_settings();
+                check(ListView_GetCheckState(list, 0) && !app.settings_dirty_,
+                      "Cancel restores checkboxes");
+                ListView_SetCheckState(list, 0, FALSE);
+                std::swap(catalog->disks[0], catalog->disks[1]);
+                catalog->disks.push_back({DeviceKind::disk, L"drive-c", L"New physical drive", 2});
+                app.populate_devices(false);
+                check(ListView_GetCheckState(list, 0) && !ListView_GetCheckState(list, 1) &&
+                          ListView_GetCheckState(list, 2) &&
+                          app.settings_draft().hidden_disks == HiddenDiskIds{L"drive-a"},
+                      "Reorder and arrival preserve draft exclusions by identity");
+                app.settings_ = *settings_from_draft(app.settings_draft());
+                app.populate_settings();
+                check(!app.settings_dirty_ && !ListView_GetCheckState(list, 1),
+                      "Committed disk visibility reopens cleanly");
+                catalog->disks.erase(catalog->disks.begin() + 1);
+                app.populate_devices(false);
+                check(!app.settings_dirty_ &&
+                          disk_hidden(app.settings_draft().hidden_disks, L"drive-a"),
+                      "Disappearance retains saved exclusion without a dirty draft");
+                catalog->disks.push_back({DeviceKind::disk, L"drive-a", L"Reconnected drive", 9});
+                app.populate_devices(false);
+                check(!ListView_GetCheckState(list, 2),
+                      "Reconnected excluded disk stays unchecked");
+                for (unsigned i = 3; i < 12; ++i) {
+                    catalog->disks.push_back({DeviceKind::disk, L"extra" + std::to_wstring(i),
+                                              L"Additional drive " + std::to_wstring(i), i});
+                }
+                app.populate_devices(false);
+                check(ListView_GetCountPerPage(list) == 4,
+                      "Many disks use four visible native rows with scrolling");
+                ListView_SetItemState(list, -1, 0, LVIS_FOCUSED | LVIS_SELECTED);
+                ListView_SetItemState(list, 7, LVIS_FOCUSED | LVIS_SELECTED,
+                                      LVIS_FOCUSED | LVIS_SELECTED);
+                ListView_EnsureVisible(list, 7, FALSE);
+                const auto focused_id = app.drive_choices_[7].first;
+                const auto top_id =
+                    app.drive_choices_[static_cast<std::size_t>(ListView_GetTopIndex(list))].first;
+                SendMessageW(list, WM_KEYDOWN, VK_SPACE, 0);
+                SendMessageW(list, WM_KEYUP, VK_SPACE, 0);
+                check(disk_hidden(app.settings_draft().hidden_disks, focused_id),
+                      "Native Space toggles the focused disk checkbox");
+                std::swap(catalog->disks[0], catalog->disks[1]);
+                app.populate_devices(false);
+                check(app.drive_choices_[static_cast<std::size_t>(
+                                             ListView_GetNextItem(list, -1, LVNI_FOCUSED))]
+                                  .first == focused_id &&
+                          app.drive_choices_[static_cast<std::size_t>(ListView_GetTopIndex(list))]
+                                  .first == top_id,
+                      "Catalog refresh preserves focus and scroll identity");
+                catalog->disks.clear();
+                app.populate_devices(false);
+                check(ListView_GetItemCount(list) == 1 &&
+                          ListView_GetItemState(list, 0, LVIS_STATEIMAGEMASK) == 0,
+                      "Empty inventory has an informational row without a checkbox");
+                check(!IsWindowEnabled(list) &&
+                          GetNextDlgTabItem(app.settings_window_, field(2), FALSE) == field(3),
+                      "Empty informational row cannot receive keyboard or mouse interaction");
+                catalog->disks.push_back({DeviceKind::disk, L"another", L"New drive", 10});
+                app.populate_devices(false);
+                check(IsWindowEnabled(list) && ListView_GetCheckState(list, 0) &&
+                          GetNextDlgTabItem(app.settings_window_, field(2), FALSE) == list,
+                      "Discovery re-enables the checklist with new drive checked");
+                app.settings_ = original_settings;
+                app.catalog_ = original_catalog;
+                app.populate_settings();
+            }
+
             const auto catalog_before = app.catalog_;
             const Monitor display_a{L"display-a", L"Display A", {0, 0, 1920, 1080}, 96, true};
             Monitor display_b{L"display-b", L"Display B", {-1080, 0, 0, 1920}, 144, false};
@@ -611,6 +799,7 @@ struct SettingsWindowTests {
 } // namespace loadbar
 int main() {
     try {
+        drive_settings_tests();
         geometry_tests();
         constrained_geometry_tests();
         draft_tests();

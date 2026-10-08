@@ -27,6 +27,7 @@ struct GridCell {
 struct CpuGrid {
     std::vector<GridCell> cells;
     float band{22}, minimum_width{48};
+    bool uniform{};
 };
 CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
     CpuGrid result;
@@ -51,14 +52,34 @@ CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
         std::ranges::stable_sort(
             cores, [](const Core &a, const Core &b) { return a.efficiency > b.efficiency; });
     }
+    if (!hybrid) {
+        result.uniform = true;
+        const int columns = std::max(
+            1, std::min(static_cast<int>(cores.size()), static_cast<int>((width + 2) / 8)));
+        const int rows = (static_cast<int>(cores.size()) + columns - 1) / columns;
+        result.band = std::max(22.0F, static_cast<float>(rows) * 8 - 2);
+        result.minimum_width = std::max(48.0F, static_cast<float>(columns) * 8 - 2);
+        const float side = std::min((width + 2) / static_cast<float>(columns) - 2,
+                                    (result.band + 2) / static_cast<float>(std::max(1, rows)) - 2);
+        for (std::size_t i = 0; i < cores.size(); ++i) {
+            const auto &core = cores[i];
+            const auto row = static_cast<int>(i) / columns;
+            result.cells.push_back({{{0, static_cast<float>(row) * (side + 2), side, side},
+                                     core.key,
+                                     processors[core.members.front()].mapped,
+                                     processors[core.members.front()].id,
+                                     core.members},
+                                    static_cast<int>(i) % columns,
+                                    columns});
+        }
+        return result;
+    }
     const unsigned highest = classes.empty() ? 0 : *classes.rbegin();
     const auto p_count = std::ranges::count_if(
         cores, [&](const Core &c) { return c.efficiency && *c.efficiency == highest; });
-    const int columns = std::max(
-        1, std::min(hybrid ? static_cast<int>(p_count) : static_cast<int>((cores.size() + 2) / 3),
-                    static_cast<int>((width + 2) / (hybrid ? 16.0F : 8.0F))));
-    result.minimum_width =
-        std::max(48.0F, static_cast<float>(columns) * (hybrid ? 16.0F : 8.0F) - 2);
+    const int columns =
+        std::max(1, std::min(static_cast<int>(p_count), static_cast<int>((width + 2) / 16.0F)));
+    result.minimum_width = std::max(48.0F, static_cast<float>(columns) * 16.0F - 2);
     int column{};
     float y{}, row_height{};
     std::optional<unsigned> previous;
@@ -119,6 +140,7 @@ void place_block(Layout::Block &b, float x, float y, float width, float band) {
 struct LayoutPlan {
     CpuGrid cpu;
     int columns{}, count{};
+    std::vector<unsigned> kinds;
     float minimum_width{}, minimum_height{};
 };
 bool valid_inputs(float width, float height, const std::vector<Processor> &processors,
@@ -129,12 +151,20 @@ bool valid_inputs(float width, float height, const std::vector<Processor> &proce
 }
 std::optional<LayoutPlan> compact_plan(float width, float height, bool horizontal,
                                        const std::vector<Processor> &processors, float text_scale,
-                                       std::size_t disk_count) {
+                                       std::size_t disk_count, const Settings &settings) {
     if (!valid_inputs(width, height, processors, text_scale, disk_count)) {
         return std::nullopt;
     }
     const float w = width / text_scale, h = height / text_scale;
-    const auto count = static_cast<int>(std::max(std::size_t{1}, disk_count)) + 4;
+    std::vector<unsigned> kinds{0, 1};
+    if (settings.gpu_visible) {
+        kinds.push_back(2);
+    }
+    kinds.insert(kinds.end(), disk_count, 3);
+    if (settings.network_visible) {
+        kinds.push_back(4);
+    }
+    const auto count = static_cast<int>(kinds.size());
     for (int cols = horizontal ? count : 1; cols >= 1; --cols) {
         const float overhead =
             22 + static_cast<float>(cols - 1) * 12 + (cols == count ? 13.0F : 0.0F);
@@ -148,7 +178,7 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
             static_cast<float>(rows) * cpu.band + static_cast<float>(rows - 1) * 12 + 18;
         if (used_h <= h) {
             const float minimum_w = overhead + static_cast<float>(cols) * (21 + cpu.minimum_width);
-            return LayoutPlan{std::move(cpu), cols, count, minimum_w, used_h};
+            return LayoutPlan{std::move(cpu), cols, count, std::move(kinds), minimum_w, used_h};
         }
     }
     return std::nullopt;
@@ -159,14 +189,15 @@ struct CompactLayout {
 };
 std::optional<CompactLayout> compact_minimum(float length, float maximum, bool horizontal,
                                              const std::vector<Processor> &processors,
-                                             float text_scale, std::size_t disk_count) {
+                                             float text_scale, std::size_t disk_count,
+                                             const Settings &settings) {
     if (!std::isfinite(maximum) || maximum < 40 || maximum > 100000) {
         return std::nullopt;
     }
     const auto plan_at = [&](int thickness) {
         const auto t = static_cast<float>(thickness);
         return compact_plan(horizontal ? length : t, horizontal ? t : length, horizontal,
-                            processors, text_scale, disk_count);
+                            processors, text_scale, disk_count, settings);
     };
     int low = 40, high = static_cast<int>(std::floor(maximum));
     if (!plan_at(high)) {
@@ -205,10 +236,11 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     l.blocks.resize(static_cast<std::size_t>(count));
     const float top = horizontal ? (h - plan.minimum_height) / 2 + 9
                                  : 9 + alignment_offset(h - plan.minimum_height, alignment);
+    std::size_t disk_index{};
     for (int i = 0; i < count; ++i) {
         auto &b = l.blocks[static_cast<std::size_t>(i)];
-        b.kind = i < 3 ? static_cast<unsigned>(i) : i == count - 1 ? 4U : 3U;
-        b.disk = i >= 3 ? static_cast<std::size_t>(i - 3) : 0;
+        b.kind = plan.kinds[static_cast<std::size_t>(i)];
+        b.disk = b.kind == 3 ? disk_index++ : 0;
         const int row = i / cols, col = i % cols;
         const int row_count = std::min(cols, count - row * cols);
         const float row_free = static_cast<float>(cols - row_count) * (g + 33);
@@ -220,8 +252,14 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     l.cores.reserve(plan.cpu.cells.size());
     for (const auto &cell : plan.cpu.cells) {
         auto core = cell.core;
-        const float cw =
+        float cw =
             (g - 2 * static_cast<float>(cell.columns - 1)) / static_cast<float>(cell.columns);
+        if (plan.cpu.uniform) {
+            cw = std::min(cw, core.label.height);
+            const float row = core.label.y / (core.label.height + 2);
+            core.label.y = row * (cw + 2);
+            core.label.height = cw;
+        }
         core.label.x = static_cast<float>(cell.column) * (cw + 2);
         core.label.width = cw;
         move(core.label, l.blocks[0].graphic.x, l.blocks[0].graphic.y);
@@ -252,7 +290,7 @@ Layout make_layout(float width, float height, bool horizontal,
     }
     const float thickness = horizontal ? height : width;
     const auto compact = compact_minimum(horizontal ? width : height, std::ceil(thickness),
-                                         horizontal, processors, text_scale, disk_count);
+                                         horizontal, processors, text_scale, disk_count, settings);
     if (!compact) {
         return {};
     }
@@ -277,15 +315,34 @@ Layout make_layout(float width, float height, bool horizontal,
     }
     return result;
 }
+Layout make_snapshot_layout(float width, float height, bool horizontal, const Snapshot &snapshot,
+                            float text_scale, const Settings &settings) {
+    if (snapshot.disks.size() > 1024) {
+        return {};
+    }
+    auto layout = make_layout(width, height, horizontal, snapshot.processors, text_scale, settings,
+                              disk_widget_count(snapshot.disks, settings));
+    std::size_t source{};
+    for (auto &block : layout.blocks) {
+        if (block.kind != 3) {
+            continue;
+        }
+        while (source < snapshot.disks.size() &&
+               !disk_visible(snapshot.disks[source].id, settings)) {
+            ++source;
+        }
+        block.disk = source++;
+    }
+    return layout;
+}
 double minimum_thickness(float length, float maximum, bool horizontal,
                          const std::vector<Processor> &processors, float scale,
                          const Settings &settings, std::size_t disk_count) {
-    (void)settings; // Alignment does not affect compact feasibility.
     if (!std::isfinite(maximum) || maximum < 1 || maximum > 10000) {
         return maximum + 1;
     }
     const auto compact =
-        compact_minimum(length, maximum, horizontal, processors, scale, disk_count);
+        compact_minimum(length, maximum, horizontal, processors, scale, disk_count, settings);
     return compact ? compact->thickness : static_cast<double>(maximum) + 1;
 }
 std::wstring core_label(const CoreBox &c) {
@@ -444,8 +501,16 @@ std::wstring metric_tooltip(const Layout &l, float x, float y, const Snapshot &s
     }
     std::wstring disks;
     for (const auto &d : s.disks) {
-        disks += d.label + L"\n";
+        if (disk_visible(d.id, settings)) {
+            disks += d.label + L"\n";
+        }
     }
-    return disks + s.gpu_label + L"\n" + s.network_label + L"\nRight-click for Settings and Exit";
+    if (settings.gpu_visible) {
+        disks += s.gpu_label + L"\n";
+    }
+    if (settings.network_visible) {
+        disks += s.network_label + L"\n";
+    }
+    return disks + L"Right-click for Settings and Exit";
 }
 } // namespace loadbar

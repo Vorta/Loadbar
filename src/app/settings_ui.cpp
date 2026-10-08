@@ -68,6 +68,21 @@ void Application::create_settings() {
             throw std::runtime_error("Create settings content failed");
         }
         for (int i = 0; i < 7; ++i) {
+            if (i == 3) {
+                child(settings_content_, instance_, L"STATIC", L"Dri&ves", 0, kDrivesLabel);
+                const auto drives =
+                    child(settings_content_, instance_, WC_LISTVIEWW, L"Drive visibility",
+                          WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL |
+                              LVS_SHOWSELALWAYS,
+                          kDrivesControl);
+                ListView_SetExtendedListViewStyle(drives, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT |
+                                                              LVS_EX_DOUBLEBUFFER |
+                                                              LVS_EX_LABELTIP);
+                LVCOLUMNW column{};
+                column.mask = LVCF_WIDTH;
+                column.cx = 400;
+                ListView_InsertColumn(drives, 0, &column);
+            }
             const auto label = i == 4 ? std::format(L"Thickness (&DIPs, {:g}–{:g})",
                                                     kMinimumThicknessDips, kMaximumThicknessDips)
                                       : std::wstring(kLabels[static_cast<std::size_t>(i)]);
@@ -164,12 +179,14 @@ void Application::populate_devices(bool committed, bool monitors_only) {
     populating_settings_ = true;
     std::array<std::wstring, 3> selected{settings_.monitor_id, settings_.gpu_id,
                                          settings_.network_id};
+    std::array visible{true, settings_.gpu_visible, settings_.network_visible};
     if (!committed) {
         for (int i = 0; i < count; ++i) {
             const int index = selection(field(settings_content_, i));
             const auto &ids = choice_ids_[static_cast<std::size_t>(i)];
             if (index >= 0 && static_cast<std::size_t>(index) < ids.size()) {
                 selected[static_cast<std::size_t>(i)] = ids[static_cast<std::size_t>(index)];
+                visible[static_cast<std::size_t>(i)] = i == 0 || index != 1;
             }
         }
     }
@@ -182,6 +199,10 @@ void Application::populate_devices(bool committed, bool monitors_only) {
         SendMessageW(combo, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(i == 0 ? L"Automatic — primary monitor"
                                                      : L"Automatic — only if unambiguous"));
+        if (i != 0) {
+            identities.push_back(selected[static_cast<std::size_t>(i)]);
+            SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Hide"));
+        }
         const auto add = [&](const std::wstring &id, const std::wstring &label) {
             if (id.empty()) {
                 return;
@@ -199,14 +220,138 @@ void Application::populate_devices(bool committed, bool monitors_only) {
                 add(device.id, device.label);
             }
         }
-        auto found = std::ranges::find(identities, selected[static_cast<std::size_t>(i)]);
+        // Skip Hide when resolving a visible device; its identity is remembered, not a sentinel.
+        auto found = selected[static_cast<std::size_t>(i)].empty()
+                         ? identities.begin()
+                         : std::find(identities.begin() + (i == 0 ? 1 : 2), identities.end(),
+                                     selected[static_cast<std::size_t>(i)]);
         if (found == identities.end()) {
             add(selected[static_cast<std::size_t>(i)], L"Saved selection — currently disconnected");
             found = std::prev(identities.end());
         }
-        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(found - identities.begin()), 0);
+        SendMessageW(combo, CB_SETCURSEL,
+                     visible[static_cast<std::size_t>(i)]
+                         ? static_cast<WPARAM>(found - identities.begin())
+                         : 1,
+                     0);
+    }
+    if (!monitors_only) {
+        populate_drives(committed);
     }
     populating_settings_ = was_populating;
+    update_settings_actions();
+}
+void Application::populate_drives(bool committed) {
+    const auto list = GetDlgItem(settings_content_, kDrivesControl);
+    if (!list) {
+        return;
+    }
+    const bool was_populating = populating_settings_;
+    populating_settings_ = true;
+    if (committed) {
+        draft_hidden_disks_ = settings_.hidden_disks;
+    }
+    const bool rebuild =
+        !std::ranges::equal(catalog_->disks, drive_choices_,
+                            [](const auto &disk, const auto &choice) {
+                                return disk.id == choice.first && disk.label == choice.second;
+                            }) ||
+        ListView_GetItemCount(list) == 0;
+    SendMessageW(list, WM_SETREDRAW, FALSE, 0);
+    if (rebuild) {
+        const int focused = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
+        const int top = ListView_GetTopIndex(list);
+        const auto identity_at = [&](int index) -> std::wstring {
+            return index >= 0 && static_cast<std::size_t>(index) < drive_choices_.size()
+                       ? drive_choices_[static_cast<std::size_t>(index)].first
+                       : L"";
+        };
+        const auto focus_id = identity_at(focused), top_id = identity_at(top);
+        ListView_DeleteAllItems(list);
+        drive_choices_.clear();
+        drive_choices_.reserve(catalog_->disks.size());
+        int focus_row =
+            std::clamp(focused, 0, std::max(0, static_cast<int>(catalog_->disks.size()) - 1));
+        int top_row{};
+        for (const auto &disk : catalog_->disks) {
+            const int row = static_cast<int>(drive_choices_.size());
+            drive_choices_.emplace_back(disk.id, disk.label);
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = row;
+            item.pszText = drive_choices_.back().second.data();
+            if (ListView_InsertItem(list, &item) == -1) {
+                throw std::runtime_error("Insert drive choice failed");
+            }
+            if (disk.id == focus_id) {
+                focus_row = row;
+            }
+            if (disk.id == top_id) {
+                top_row = row;
+            }
+        }
+        if (!drive_choices_.empty()) {
+            ListView_SetItemState(list, focus_row, LVIS_FOCUSED | LVIS_SELECTED,
+                                  LVIS_FOCUSED | LVIS_SELECTED);
+            RECT row{};
+            if (ListView_GetItemRect(list, 0, &row, LVIR_BOUNDS)) {
+                ListView_Scroll(list, 0,
+                                (top_row - ListView_GetTopIndex(list)) * (row.bottom - row.top));
+            }
+        }
+    }
+    if (drive_choices_.empty()) {
+        std::wstring text = snapshot_.disk_discovery.status == Status::error
+                                ? L"Drive discovery unavailable"
+                                : L"No physical drives detected";
+        if (ListView_GetItemCount(list) == 0) {
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.pszText = text.data();
+            if (ListView_InsertItem(list, &item) == -1) {
+                throw std::runtime_error("Insert empty drive status failed");
+            }
+        } else {
+            ListView_SetItemText(list, 0, 0, text.data());
+        }
+        ListView_SetItemState(list, 0, 0, LVIS_STATEIMAGEMASK);
+    } else {
+        for (std::size_t i = 0; i < drive_choices_.size(); ++i) {
+            const bool checked = !disk_hidden(draft_hidden_disks_, drive_choices_[i].first);
+            if ((ListView_GetCheckState(list, static_cast<int>(i)) != FALSE) != checked) {
+                ListView_SetCheckState(list, static_cast<int>(i), checked);
+            }
+        }
+    }
+    if (drive_choices_.empty() && GetFocus() == list) {
+        SetFocus(field(settings_content_, 3));
+    }
+    EnableWindow(list, !drive_choices_.empty());
+    SendMessageW(list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(list, nullptr, FALSE);
+    populating_settings_ = was_populating;
+    if (rebuild) {
+        layout_settings();
+    }
+}
+void Application::drive_check_changed(int index) {
+    if (populating_settings_ || index < 0 ||
+        static_cast<std::size_t>(index) >= drive_choices_.size()) {
+        return;
+    }
+    const auto &id = drive_choices_[static_cast<std::size_t>(index)].first;
+    if (ListView_GetCheckState(GetDlgItem(settings_content_, kDrivesControl), index)) {
+        show_disk(draft_hidden_disks_, id);
+    } else {
+        if (draft_hidden_disks_.size() >= kMaximumHiddenDisks &&
+            !disk_hidden(draft_hidden_disks_, id)) {
+            populate_drives(false);
+            MessageBoxW(settings_window_, L"The saved hidden-drive limit has been reached.",
+                        L"Loadbar — drive visibility", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        hide_disk(draft_hidden_disks_, id);
+    }
     update_settings_actions();
 }
 HWND Application::settings_control(int id) const noexcept {
@@ -270,8 +415,15 @@ void Application::layout_settings() {
             status_height = static_cast<int>(std::round(60 * scale));
         }
     }
-    const auto layout = settings_layout(client.right, client.bottom, scale, retry_visible_, scroll_,
-                                        GetSystemMetricsForDpi(SM_CXVSCROLL, dpi), status_height);
+    const auto drives = GetDlgItem(settings_content_, kDrivesControl);
+    RECT drive_row{};
+    const int drive_row_height = ListView_GetItemRect(drives, 0, &drive_row, LVIR_BOUNDS)
+                                     ? drive_row.bottom - drive_row.top
+                                     : static_cast<int>(std::ceil(20 * scale));
+    const auto layout =
+        settings_layout(client.right, client.bottom, scale, retry_visible_, scroll_,
+                        GetSystemMetricsForDpi(SM_CXVSCROLL, dpi), status_height,
+                        std::max(1, ListView_GetItemCount(drives)), drive_row_height);
     scroll_ = layout.scroll;
     const auto footer_parent = layout.scroll_footer ? settings_content_ : settings_window_;
     for (const auto id : {kFooterStatus, kApplySettings, kCancelSettings, 102, 100}) {
@@ -324,6 +476,11 @@ void Application::layout_settings() {
         }
         position(field(settings_content_, static_cast<int>(i)), bounds);
     }
+    position(GetDlgItem(settings_content_, kDrivesLabel), layout.drives_label);
+    position(drives, layout.drives);
+    RECT drive_client{};
+    GetClientRect(drives, &drive_client);
+    ListView_SetColumnWidth(drives, 0, std::max(1L, drive_client.right));
     position(settings_control(kFooterStatus), layout.footer_status);
     position(GetDlgItem(settings_content_, kFirstLabel + 7), layout.readings_label);
     const auto list = GetDlgItem(settings_content_, kDetailsControl);
@@ -375,8 +532,15 @@ SettingsDraft Application::settings_draft() const {
             draft.selections_valid = false;
         } else {
             draft.device_ids[i] = choice_ids_[i][static_cast<std::size_t>(index)];
+            if (i == 1) {
+                draft.gpu_visible = index != 1;
+            }
+            if (i == 2) {
+                draft.network_visible = index != 1;
+            }
         }
     }
+    draft.hidden_disks = draft_hidden_disks_;
     draft.edge = selection(field(settings_content_, 3));
     draft.alignment = selection(field(settings_content_, 6));
     draft.thickness = edit_text(field(settings_content_, 4));
@@ -386,6 +550,13 @@ SettingsDraft Application::settings_draft() const {
 void Application::update_settings_actions() {
     if (!settings_content_ || populating_settings_) {
         return;
+    }
+    for (std::size_t i = 1; i < choice_ids_.size(); ++i) {
+        const int index = selection(field(settings_content_, static_cast<int>(i)));
+        if (index >= 0 && index != 1 && static_cast<std::size_t>(index) < choice_ids_[i].size() &&
+            choice_ids_[i].size() > 1) {
+            choice_ids_[i][1] = choice_ids_[i][static_cast<std::size_t>(index)];
+        }
     }
     settings_dirty_ = settings_dirty(settings_draft(), settings_);
     for (const auto id : {kApplySettings, kCancelSettings}) {
@@ -456,7 +627,7 @@ bool Application::commit_settings(Settings settings) {
                     L"Loadbar — active settings could not be saved", MB_OK | MB_ICONWARNING);
     }
     if (collection_changed(previous, settings_)) {
-        reconfigure_worker();
+        reconfigure_worker(previous.interval_ms != settings_.interval_ms);
     } else {
         InvalidateRect(window_, nullptr, FALSE);
         update_tooltip();
@@ -468,6 +639,8 @@ bool Application::commit_settings(Settings settings) {
             update_settings_actions();
         }
     }
+    detail_structure_changed_ = true;
+    update_details();
     update_settings_status();
     schedule_refresh();
     return true;
@@ -504,12 +677,14 @@ void Application::update_settings_status() {
         layout_settings();
     }
 }
-void Application::reconfigure_worker() {
+void Application::reconfigure_worker(bool reset) {
     if (worker_) {
         ++expected_generation_;
-        worker_->configure(settings_, paused_);
-        set_snapshot_status(snapshot_, Status::warming_up,
-                            L"Priming after configuration or resume");
+        worker_->configure(settings_, paused_, reset);
+        if (reset) {
+            set_snapshot_status(snapshot_, Status::warming_up,
+                                L"Priming after configuration or resume");
+        }
         ++observation_revision_;
         if (!paused_ && IsWindowVisible(window_)) {
             InvalidateRect(window_, nullptr, FALSE);
@@ -545,6 +720,15 @@ void Application::update_details() {
                                      metric.detail));
     }
     for (std::size_t index = 0; index < kGaugeCount; ++index) {
+        if (!gauge_visible(static_cast<Gauge>(index), settings_)) {
+            if (index == 1 || index == 4) {
+                if (detail_structure_changed_) {
+                    keys.emplace_back(index == 1 ? L"GPU" : L"Network");
+                }
+                values.emplace_back(L"Hidden — sampling paused");
+            }
+            continue;
+        }
         const auto metric = aged_metric(snapshot_.gauges[index], now, settings_.interval_ms);
         if (detail_structure_changed_) {
             keys.emplace_back(index == 3 ? snapshot_.gpu_memory_label
@@ -570,6 +754,13 @@ void Application::update_details() {
     missing_disk.read.unit = missing_disk.write.unit = Unit::bytes_per_second;
     for (std::size_t i = 0; i < std::max(std::size_t{1}, snapshot_.disks.size()); ++i) {
         const auto &disk = snapshot_.disks.empty() ? missing_disk : snapshot_.disks[i];
+        if (!disk_visible(disk.id, settings_)) {
+            if (detail_structure_changed_) {
+                keys.push_back(disk.label);
+            }
+            values.emplace_back(L"Hidden — sampling paused");
+            continue;
+        }
         for (auto direction : {Gauge::disk_active, Gauge::disk_read, Gauge::disk_write}) {
             const auto &source = direction == Gauge::disk_active ? disk.active
                                  : direction == Gauge::disk_read ? disk.read

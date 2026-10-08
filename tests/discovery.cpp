@@ -136,6 +136,225 @@ void topology_api_tests() {
 
 namespace loadbar {
 struct CollectorDiscoveryTests {
+
+    static void drive_visibility() {
+        SessionPeaks peaks;
+        DiskInventory inventory;
+        CpuSamples processors;
+        DisplayContinuity continuity;
+        Discovery next;
+        next.catalog.disks = {{DeviceKind::disk, L"a", L"Disk A", 0},
+                              {DeviceKind::disk, L"b", L"Disk B", 1}};
+        Collector collector(peaks, inventory, processors, [&] { return next; });
+        Settings settings;
+        collector.configure(settings);
+        auto now = Clock::time_point{} + 1s;
+        double rate = 100;
+        unsigned io_calls{}, idle_calls{};
+        const DiskCounterRead io = [&] {
+            ++io_calls;
+            Metric value{rate, Status::valid, Unit::bytes_per_second, now, 1s, {}};
+            return std::vector<std::vector<CounterItem>>{{{L"0 C:", value}, {L"1 D:", value}},
+                                                         {{L"0 C:", value}, {L"1 D:", value}}};
+        };
+        const DiskCounterRead idle = [&] {
+            ++idle_calls;
+            Metric value{25, Status::valid, Unit::percent, now, 1s, {}};
+            return std::vector<std::vector<CounterItem>>{{{L"0 C:", value}, {L"1 D:", value}}};
+        };
+        Snapshot snapshot;
+        const auto sample = [&] {
+            collect_disk_readings(snapshot, collector.catalog().disks, now, io, idle, nullptr,
+                                  settings.hidden_disks);
+            peaks.observe(snapshot);
+            continuity.observe(snapshot, settings);
+        };
+        sample();
+        const auto first = now;
+        const auto sentinel = now + 1000s;
+        for (auto *source : {&collector.cpu_, &collector.disk_io_, &collector.disk_idle_,
+                             &collector.gpu_engines_}) {
+            source->retry_ = sentinel;
+        }
+        hide_disk(settings.hidden_disks, L"a");
+        collector.configure(settings, false);
+        require(collector.disk_io_.retry_ == sentinel && collector.disk_idle_.retry_ == sentinel,
+                "Hiding one disk preserves shared queries for the visible disk");
+        now += 1s;
+        rate = 10000;
+        sample();
+        require(io_calls == 2 && idle_calls == 2 && snapshot.disks[1].read.value == rate &&
+                    snapshot.disks[0].read.status == Status::unavailable &&
+                    snapshot.disks[0].read.session_peak == 100 &&
+                    presented_metric(snapshot.disks[0].read).value == 100 &&
+                    presented_metric(snapshot.disks[0].read).timestamp == first,
+                "Hidden disk ignores shared array values while preserving original observation and "
+                "peak");
+        hide_disk(settings.hidden_disks, L"b");
+        collector.configure(settings, false);
+        require(collector.disk_io_.retry_ == Clock::time_point{} &&
+                    collector.disk_idle_.retry_ == Clock::time_point{} &&
+                    collector.cpu_.retry_ == sentinel && collector.gpu_engines_.retry_ == sentinel,
+                "Hiding every disk resets only disk queries");
+        now += 1s;
+        sample();
+        collector.disk(snapshot, now);
+        require(io_calls == 2 && idle_calls == 2 && !collector.disk_io_.open_ &&
+                    !collector.disk_idle_.open_,
+                "All hidden skips and closes both disk queries");
+        next.catalog.disks.push_back({DeviceKind::disk, L"c", L"New drive", 2});
+        collector.configure(settings, false);
+        require(collector.disk_sampling_ && collector.catalog().disks.size() == 3 &&
+                    !disk_hidden(settings.hidden_disks, L"c"),
+                "Discovery continues and a new drive automatically resumes shared sampling");
+        next.catalog.disks.pop_back();
+        collector.configure(settings, false);
+        show_disk(settings.hidden_disks, L"a");
+        collector.configure(settings, false);
+        require(collector.disk_sampling_ && !collector.disk_io_.open_ &&
+                    collector.disk_io_.retry_ == Clock::time_point{},
+                "Showing a drive reopens from unprimed query state");
+        const DiskCounterRead warming = []() -> Result<std::vector<std::vector<CounterItem>>> {
+            return std::unexpected(Error{L"Priming", ERROR_NOT_READY});
+        };
+        collect_disk_readings(snapshot, collector.catalog().disks, now, warming, warming, nullptr,
+                              settings.hidden_disks);
+        peaks.observe(snapshot);
+        continuity.observe(snapshot, settings);
+        require(snapshot.disks[0].read.status == Status::warming_up &&
+                    presented_metric(snapshot.disks[0].read).value == 100 &&
+                    snapshot.disks[0].read.session_peak == 100,
+                "Query warmup after showing retains pre-hide reading and peak");
+        now += 1s;
+        rate = 20;
+        sample();
+        require(snapshot.disks[0].read.value == 20 && snapshot.disks[0].read.session_peak == 100 &&
+                    snapshot.disks[1].read.session_peak == 10000,
+                "Resumed device has independent original peak");
+        next.disk_error = Error{L"Discovery failed", ERROR_GEN_FAILURE};
+        next.catalog.disks.clear();
+        collector.configure(settings, false);
+        collector.disk(snapshot, now);
+        require(snapshot.disks.size() == 2 && snapshot.disks[0].read.status == Status::error &&
+                    snapshot.disks[1].read.detail == L"Hidden — sampling paused",
+                "Discovery failure retains identities and preserves explicit hidden status");
+        next.disk_error.reset();
+        collector.configure(settings, false);
+        next.catalog.disks = {{DeviceKind::disk, L"b", L"Reconnected B", 9}};
+        collector.configure(settings, false);
+        collector.disk(snapshot, now);
+        require(!collector.disk_sampling_ && snapshot.disks[0].id == L"b" &&
+                    snapshot.disks[0].read.detail == L"Hidden — sampling paused",
+                "Stable hidden identity survives reconnect with a different disk number");
+        snapshot = {};
+        snapshot.disks.push_back({L"b", L"Hidden B"});
+        snapshot.disks[0].read = {100, Status::valid, Unit::bytes_per_second, now, 1s, {}};
+        require(next_stale_deadline(snapshot, 1000).has_value() &&
+                    !next_stale_deadline(snapshot, 1000, settings) &&
+                    !expire_snapshot(snapshot, now + 10s, 1000, settings),
+                "Hidden disks do not schedule expiry or freshness repaint");
+        snapshot.disks[0].read.status = Status::unavailable;
+        snapshot.disks[0].read.retained = ObservedValue{100, now};
+        require(next_retention_deadline(snapshot, now + 10s, 1000).has_value() &&
+                    !next_retention_deadline(snapshot, now + 10s, 1000, settings),
+                "Hidden retained disk observations do not schedule age updates");
+    }
+
+    static void visibility() {
+        SessionPeaks peaks;
+        DiskInventory disks;
+        CpuSamples processors;
+        DisplayContinuity continuity;
+        Discovery next;
+        next.catalog.gpus = {{DeviceKind::gpu, L"gpu", L"GPU", 10, 1000}};
+        next.catalog.networks = {{DeviceKind::network, L"nic", L"NIC", 20}};
+        next.catalog.disks = {{DeviceKind::disk, L"disk", L"Disk", 0}};
+        Collector collector(peaks, disks, processors, [&] { return next; });
+        Settings settings;
+        settings.gpu_id = L"gpu";
+        settings.network_id = L"nic";
+        collector.configure(settings);
+        auto now = Clock::time_point{} + 1s;
+        unsigned reads{};
+        InterfaceCounters counters{1000, 100, true};
+        collector.network_provider_ = NetworkProvider(
+            [&](std::uint64_t luid) -> Result<InterfaceCounters> {
+                require(luid == 20, "Sample only selected interface");
+                ++reads;
+                return counters;
+            },
+            [&] { return now; });
+        Snapshot snapshot;
+        collector.network(snapshot, now);
+        require(reads == 1 && snapshot.gauges[4].status == Status::warming_up,
+                "Network initially primes a real baseline");
+        now += 1s;
+        counters.received += 200;
+        counters.sent += 50;
+        collector.network(snapshot, now);
+        snapshot.gauges[4].identity = snapshot.gauges[5].identity = L"nic";
+        peaks.observe(snapshot);
+        continuity.observe(snapshot, settings);
+        require(snapshot.gauges[4].value == 200 && snapshot.gauges[4].session_peak == 200,
+                "Visible interface establishes its session peak");
+        const auto sentinel = now + 1000s;
+        for (auto *source :
+             {&collector.cpu_, &collector.disk_io_, &collector.disk_idle_, &collector.gpu_engines_,
+              &collector.gpu_memory_, &collector.gpu_shared_}) {
+            source->retry_ = sentinel;
+        }
+        settings.gpu_visible = false;
+        collector.configure(settings, false);
+        now += 1s;
+        counters.received += 20;
+        collector.network(snapshot, now);
+        require(snapshot.gauges[4].status == Status::valid && snapshot.gauges[4].value == 20,
+                "GPU hide does not re-prime network baseline");
+        settings.network_visible = false;
+        collector.configure(settings, false);
+        require(collector.cpu_.retry_ == sentinel && collector.disk_io_.retry_ == sentinel &&
+                    collector.disk_idle_.retry_ == sentinel &&
+                    collector.gpu_engines_.retry_ == Clock::time_point{},
+                "Visibility changes reset only their own family, preserving CPU/disk queries");
+        // A hidden GPU must not even attempt opening PDH. Open state is observable without
+        // hardware.
+        const auto before = reads;
+        Snapshot hidden;
+        for (int tick = 0; tick < 4; ++tick) {
+            now += 1s;
+            collector.network(hidden, now);
+            collector.gpu(hidden, now);
+            continuity.observe(hidden, settings);
+        }
+        require(reads == before && !collector.gpu_engines_.open_ && !collector.gpu_memory_.open_ &&
+                    !collector.gpu_shared_.open_ &&
+                    collector.gpu_engines_.retry_ == Clock::time_point{} &&
+                    hidden.gauges[1].detail == L"Hidden — sampling paused",
+                "Hidden families do not read NIC or open GPU counters");
+        settings.network_visible = true;
+        collector.configure(settings, false);
+        now += 1s;
+        counters.received += 10000;
+        Snapshot resumed;
+        collector.network(resumed, now);
+        resumed.gauges[4].identity = resumed.gauges[5].identity = L"nic";
+        peaks.observe(resumed);
+        continuity.observe(resumed, settings);
+        require(resumed.gauges[4].status == Status::warming_up &&
+                    presented_metric(resumed.gauges[4]).value == 200 &&
+                    resumed.gauges[4].session_peak == 200,
+                "Show re-primes rates and restores last valid reading and peak, excluding hidden "
+                "traffic");
+        now += 1s;
+        counters.received += 40;
+        collector.network(resumed, now);
+        resumed.gauges[4].identity = resumed.gauges[5].identity = L"nic";
+        peaks.observe(resumed);
+        require(resumed.gauges[4].status == Status::valid && resumed.gauges[4].value == 40 &&
+                    resumed.gauges[4].session_peak == 200,
+                "Fresh visible interval resumes independently with original session scale");
+    }
+
     static void cpu_continuity() {
         SessionPeaks peaks;
         DiskInventory disks;
@@ -308,10 +527,11 @@ struct CollectorDiscoveryTests {
         require(inventory.devices.empty() && collector.catalog().disks.empty(),
                 "Successful empty enumeration commits real removal");
         next.disk_error = Error{L"Cold disk discovery", ERROR_ACCESS_DENIED};
-        Collector cold(peaks, inventory, processors, [&] { return next; });
-        cold.configure({});
+        // Keep the second large provider fixture off the test runner's stack.
+        auto cold = std::make_unique<Collector>(peaks, inventory, processors, [&] { return next; });
+        cold->configure({});
         Snapshot absent;
-        cold.disk(absent, now + 120s);
+        cold->disk(absent, now + 120s);
         continuity.observe(absent);
         Layout::Block block;
         block.kind = 3;
@@ -328,5 +548,7 @@ void discovery_tests() {
     enumeration_tests();
     topology_api_tests();
     loadbar::CollectorDiscoveryTests::run();
+    loadbar::CollectorDiscoveryTests::visibility();
+    loadbar::CollectorDiscoveryTests::drive_visibility();
     loadbar::CollectorDiscoveryTests::cpu_continuity();
 }

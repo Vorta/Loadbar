@@ -50,17 +50,28 @@ launch reports the existing instance before creating an AppBar; there is no IPC 
 
 ## Settings
 
-A versioned registry value stores committed settings. Schema 7 accepts whole-number thickness;
+A versioned registry value stores committed settings. Schema 9 adds a set of explicitly hidden physical-disk identities to the independent
+GPU/network visibility flags and whole-number thickness;
 older schemas validate against their original bounds before migrating percentage/fractional
 sizes and retired appearance/rate controls. Conversion uses the resolved monitor and DPI.
-Loading never writes; a save failure preserves the active in-memory configuration.
+Schemas 1–7 migrate with both widgets visible and device preferences intact. Loading never
+writes; a save failure preserves the active in-memory configuration. Schemas 1–8 have no
+disk exclusions. The bounded set accepts up to 1,024 IDs of up to 1,024 UTF-16 characters;
+the decoder and registry reader share a 2,108,416-character limit including escaping.
+A sorted unique vector keeps empty settings allocation-free and moves nonthrowing;
+model mutation helpers maintain canonical ordering for equality and binary lookup.
+Disconnected exclusions remain saved, so reconnecting a hidden disk does not reveal it.
 
 Settings uses native controls, a scrollable content host and a readings ListView that fills the
-available space. Labels stack on narrow windows. The right-aligned footer wraps, or joins the
+available space. A native checkbox ListView between Network and Edge shows detected physical
+drives, up to four rows before scrolling. Refreshes preserve draft exclusions, focus and scroll
+identity; new drives are checked. The checklist participates in Apply/Cancel and keyboard order.
+Labels stack on narrow windows. The right-aligned footer wraps, or joins the
 scrolling content when it cannot fit. Keyboard traversal follows control order in either mode.
 DPI/text scale changes control sizing; ordinary resizing only changes layout and table columns.
 
-Apply is enabled only for a valid changed draft; Cancel restores committed values. Placement
+Apply is enabled for a changed draft and validates it before committing; Cancel restores
+committed values. Placement
 failure retains the draft. Tray changes refresh a clean form and preserve edits. Actionable
 footer messages cover placement, sampling, tray, rendering, persistence and monitor fallback.
 Retry appears only for recoverable infrastructure failures; individual counters retry themselves.
@@ -76,6 +87,6 @@ atomically; target loss discards only target-bound resources. See [design.md](de
 Native tooltips and the Settings readings list expose exact values, identities and raw status.
 Painted cores are not separate UI Automation elements. List structure is reused across samples.
 
-Defaults, `resources/loadbar.ico`, manifest, version 1.0.0 metadata and the MIT notice are
+Defaults, `resources/loadbar.ico`, manifest, version 1.1.0 metadata and the MIT notice are
 embedded. `resources/icon.svg` is editable artwork; it is not loaded at runtime. CMake tracks
 file-backed resource and manifest dependencies explicitly.

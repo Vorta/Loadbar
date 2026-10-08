@@ -403,7 +403,8 @@ void appearance_tests() {
                 gauge_palette(Gauge::disk_write).hue == rgb(0x36884D),
             "Exact disk hues");
     const auto old = decode_settings(L"Loadbar 4 2 6 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 1");
-    require(old && encode_settings(*old) == L"Loadbar 7 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1",
+    require(old && encode_settings(*old) ==
+                       L"Loadbar 9 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 0 0",
             "Migration retires appearance switches and raises old sizes to 40 DIPs");
     require(!decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 1 0 0 0") &&
                 !decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 3"),

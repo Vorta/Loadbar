@@ -76,10 +76,11 @@ class Renderer {
     std::vector<std::array<Reading, 3>> block_readings_;
     std::size_t cursor_{};
     Layout layout_;
-    std::size_t layout_disk_count_{};
+    std::vector<std::pair<std::wstring, bool>> layout_disks_;
+    bool disk_layout_changed(const Snapshot &snapshot, const Settings &settings) const;
     std::vector<std::tuple<unsigned, ProcessorId, bool, std::optional<unsigned>>> topology_;
     float layout_width_{}, layout_height_{}, layout_scale_{}, layout_dpi_{};
-    bool layout_horizontal_{};
+    bool layout_horizontal_{}, layout_gpu_visible_{true}, layout_network_visible_{true};
     Alignment layout_alignment_{};
     float content_scale_{};
     bool high_contrast_{};

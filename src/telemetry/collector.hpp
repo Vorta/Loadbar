@@ -17,8 +17,8 @@ using DiskCounterRead = std::function<Result<std::vector<std::vector<CounterItem
 // Narrow collection seam shared by the worker and deterministic provider-failure tests.
 void collect_disk_readings(Snapshot &snapshot, const std::vector<Device> &devices,
                            Clock::time_point now, const DiskCounterRead &read_io,
-                           const DiskCounterRead &read_idle,
-                           const Error *discovery_error = nullptr);
+                           const DiskCounterRead &read_idle, const Error *discovery_error = nullptr,
+                           const HiddenDiskIds &hidden_disks = {});
 void collect_gpu_readings(Snapshot &snapshot, const Device &device, Clock::time_point now,
                           const DiskCounterRead &read_engines,
                           const DiskCounterRead &read_dedicated,
@@ -85,7 +85,8 @@ class Collector {
     using Discover = std::function<Discovery()>;
     Collector(SessionPeaks &peaks, DiskInventory &disks, CpuSamples &processors,
               Discover discover = {});
-    void configure(const Settings &settings, bool reset = true);
+    void configure(const Settings &settings, bool reset = true, bool reset_gpu = false,
+                   bool reset_network = false);
     Snapshot sample(Clock::time_point now);
     const Catalog &catalog() const noexcept {
         return catalog_;
@@ -101,6 +102,8 @@ class Collector {
     CpuSamples &cpu_samples_;
     GpuSamples gpu_samples_;
     std::optional<Device> gpu_, network_;
+    bool gpu_visible_{true}, network_visible_{true}, disk_sampling_{};
+    HiddenDiskIds hidden_disks_;
     CounterSource cpu_, disk_io_, disk_idle_, gpu_engines_, gpu_memory_, gpu_shared_;
     NetworkProvider network_provider_;
     void cpu(Snapshot &snapshot, Clock::time_point now);
@@ -147,7 +150,7 @@ class SamplingWorker {
     ~SamplingWorker();
     SamplingWorker(const SamplingWorker &) = delete;
     SamplingWorker &operator=(const SamplingWorker &) = delete;
-    void configure(Settings settings, bool paused);
+    void configure(Settings settings, bool paused, bool reset = true);
     void stop();
 
   private:
@@ -163,7 +166,7 @@ class SamplingWorker {
     std::condition_variable_any changed_;
     Settings settings_;
     bool paused_{};
-    std::uint64_t generation_{1};
+    std::uint64_t generation_{1}, reset_generation_{1}, gpu_generation_{1}, network_generation_{1};
     const std::uint64_t worker_id_;
     std::jthread thread_;
 };

@@ -40,6 +40,12 @@ Metric disk_active_time(Metric idle) {
     idle.value = 100 - idle.value;
     return idle;
 }
+std::size_t disk_widget_count(std::span<const DiskReading> disks, const Settings &settings) {
+    return disks.empty()
+               ? 1
+               : static_cast<std::size_t>(std::ranges::count_if(
+                     disks, [&](const auto &disk) { return disk_visible(disk.id, settings); }));
+}
 Metric disk_counter(const std::vector<CounterItem> &items, const Device &disk,
                     Clock::time_point now, Unit unit) {
     const auto number = std::to_wstring(disk.runtime_id);
@@ -92,19 +98,27 @@ Clock::duration stale_after(unsigned interval_ms) noexcept {
     return std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(
         std::max(3000ULL, static_cast<unsigned long long>(interval_ms) * 3)));
 }
-template <class SnapshotType, class Apply> void visit_metrics(SnapshotType &snapshot, Apply apply) {
+template <class SnapshotType, class Apply>
+void visit_metrics(SnapshotType &snapshot, Apply apply, const Settings &visibility = {}) {
     for (auto &processor : snapshot.processors) {
         apply(processor.utilization);
     }
-    for (auto &metric : snapshot.gauges) {
-        apply(metric);
+    for (std::size_t i = 0; i < snapshot.gauges.size(); ++i) {
+        if (gauge_visible(static_cast<Gauge>(i), visibility)) {
+            apply(snapshot.gauges[i]);
+        }
     }
     for (auto &disk : snapshot.disks) {
+        if (!disk_visible(disk.id, visibility)) {
+            continue;
+        }
         apply(disk.read);
         apply(disk.write);
         apply(disk.active);
     }
-    apply(snapshot.gpu_memory_bytes);
+    if (visibility.gpu_visible) {
+        apply(snapshot.gpu_memory_bytes);
+    }
     apply(snapshot.ram_used_bytes);
 }
 std::optional<Clock::time_point> after(Clock::time_point start, Clock::duration delay) noexcept {
@@ -126,59 +140,70 @@ MetricView aged_metric(MetricView metric, Clock::time_point now, unsigned interv
     result.status = status_at(metric, now, interval_ms);
     return result;
 }
-std::optional<Clock::time_point> next_stale_deadline(const Snapshot &snapshot,
-                                                     unsigned interval_ms) noexcept {
+std::optional<Clock::time_point> next_stale_deadline(const Snapshot &snapshot, unsigned interval_ms,
+                                                     const Settings &visibility) noexcept {
     std::optional<Clock::time_point> result;
     const auto delay = stale_after(interval_ms) + Clock::duration{1};
-    visit_metrics(snapshot, [&](const Metric &metric) {
-        if (metric.status == Status::valid) {
-            const auto candidate = after(metric.timestamp, delay);
-            if (candidate && (!result || *candidate < *result)) {
-                result = candidate;
+    visit_metrics(
+        snapshot,
+        [&](const Metric &metric) {
+            if (metric.status == Status::valid) {
+                const auto candidate = after(metric.timestamp, delay);
+                if (candidate && (!result || *candidate < *result)) {
+                    result = candidate;
+                }
             }
-        }
-    });
+        },
+        visibility);
     return result;
 }
 std::optional<Clock::time_point> next_retention_deadline(const Snapshot &snapshot,
                                                          Clock::time_point now,
-                                                         unsigned interval_ms) noexcept {
+                                                         unsigned interval_ms,
+                                                         const Settings &visibility) noexcept {
     std::optional<Clock::time_point> result;
     const auto second = std::chrono::duration_cast<Clock::duration>(std::chrono::seconds(1));
     const auto half = second / 2;
-    visit_metrics(snapshot, [&](const Metric &metric) {
-        if (!metric.retained || status_at(metric, now, interval_ms) == Status::valid) {
-            return;
-        }
-        const auto observed = metric.retained->timestamp;
-        std::optional<Clock::time_point> candidate;
-        if (now <= observed) {
-            candidate = after(observed, half + Clock::duration{1});
-        } else {
-            // Subtract only subsecond remainders so malformed extreme timestamps cannot
-            // overflow the clock's signed representation. Age changes at half seconds.
-            auto delay =
-                half - (now.time_since_epoch() % second - observed.time_since_epoch() % second);
-            if (delay < Clock::duration::zero()) {
-                delay += second;
-            } else if (delay >= second) {
-                delay -= second;
+    visit_metrics(
+        snapshot,
+        [&](const Metric &metric) {
+            if (!metric.retained || status_at(metric, now, interval_ms) == Status::valid) {
+                return;
             }
-            candidate = after(now, delay + Clock::duration{1});
-        }
-        if (candidate && (!result || *candidate < *result)) {
-            result = candidate;
-        }
-    });
+            const auto observed = metric.retained->timestamp;
+            std::optional<Clock::time_point> candidate;
+            if (now <= observed) {
+                candidate = after(observed, half + Clock::duration{1});
+            } else {
+                // Subtract only subsecond remainders so malformed extreme timestamps cannot
+                // overflow the clock's signed representation. Age changes at half seconds.
+                auto delay =
+                    half - (now.time_since_epoch() % second - observed.time_since_epoch() % second);
+                if (delay < Clock::duration::zero()) {
+                    delay += second;
+                } else if (delay >= second) {
+                    delay -= second;
+                }
+                candidate = after(now, delay + Clock::duration{1});
+            }
+            if (candidate && (!result || *candidate < *result)) {
+                result = candidate;
+            }
+        },
+        visibility);
     return result;
 }
-bool expire_snapshot(Snapshot &snapshot, Clock::time_point now, unsigned interval_ms) {
+bool expire_snapshot(Snapshot &snapshot, Clock::time_point now, unsigned interval_ms,
+                     const Settings &visibility) {
     bool changed{};
-    visit_metrics(snapshot, [&](Metric &metric) {
-        const auto status = status_at(metric, now, interval_ms);
-        changed = changed || metric.status != status;
-        metric.status = status;
-    });
+    visit_metrics(
+        snapshot,
+        [&](Metric &metric) {
+            const auto status = status_at(metric, now, interval_ms);
+            changed = changed || metric.status != status;
+            metric.status = status;
+        },
+        visibility);
     return changed;
 }
 namespace {

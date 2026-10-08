@@ -32,6 +32,8 @@ class Application {
     void show_settings(bool activate = true);
     void populate_settings();
     void populate_devices(bool committed, bool monitors_only = false);
+    void populate_drives(bool committed);
+    void drive_check_changed(int index);
     void update_monitors(std::vector<Monitor> monitors);
     void layout_settings();
     HWND settings_control(int id) const noexcept;
@@ -44,7 +46,7 @@ class Application {
     void update_settings_status();
     void update_tooltip();
     void schedule_refresh();
-    void reconfigure_worker();
+    void reconfigure_worker(bool reset = true);
     void sampling_failed(std::optional<Delivery> update);
     void ensure_visible(HWND control);
     void shutdown() noexcept;
@@ -88,6 +90,8 @@ class Application {
     Snapshot snapshot_;
     std::shared_ptr<const Catalog> catalog_{std::make_shared<const Catalog>()};
     std::array<std::vector<std::wstring>, 3> choice_ids_;
+    std::vector<std::pair<std::wstring, std::wstring>> drive_choices_;
+    HiddenDiskIds draft_hidden_disks_;
     std::vector<std::wstring> detail_keys_, detail_values_;
     HWND tooltip_{};
     std::wstring tooltip_text_;

@@ -78,18 +78,19 @@ Centralize these defaults; do not promote them into additional user requirements
 | Sampling | 1,000 ms; validate a configurable range of 250–5,000 ms. |
 | Placement | Bottom on portrait; right on landscape. Allow explicit selection of any edge. |
 | Thickness | Default 40 DIPs; validate whole-number input from 40–640 DIPs, increasing to the readable minimum for topology/orientation/text scale; DIPs are the only sizing unit; migrate saved percentage sizes. |
-| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; identify each in hover tooltips and Settings, with graphics-only rest. |
+| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings, with graphics-only rest. |
 | Disk mode | Active time with smaller read/write throughput bars. Keep IOPS feasible without implementing it speculatively. |
 | Rate units | B/s, KiB/s, MiB/s, GiB/s; adapt units without confusing bytes/bits or binary/decimal scaling. |
 | Controls | Notification-area menu for selection, placement, settings, and exit; no autohide by default. |
 | Startup | No launch-at-sign-in registration unless explicitly requested. |
 
-Never sum physical disks or select only one for display. Prefer a non-software GPU with the largest reported
+Never sum physical disks or silently select only one for display. Remember explicitly hidden disks
+by stable identity; new identities are shown automatically. Prefer a non-software GPU with the largest reported
 dedicated-memory capacity, and an active physical interface associated with the default
 route. Expose ambiguous choices and allow overrides; never silently sum devices.
 
 Version and validate persisted settings: identities, edge, DIP thickness, interval,
-and enumerations. Migrate retired fixed rate ceilings/logarithmic settings explicitly; session
+visibility, and enumerations. Migrate retired fixed rate ceilings/logarithmic settings explicitly; session
 peaks are never persisted. Clamp dimensions to a documented safe/readable range. Preserve
 explicit edge choice through rotation; only automatic placement may follow orientation.
 Fall back to embedded defaults on malformed/missing settings. Save committed changes,
@@ -288,7 +289,10 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
 ## Visualization and execution model
 
 - Make solid core rectangles the CPU visualization: more utilization means stronger color.
-  Scale their widths proportionally so CPU and every device graphic have equal widths.
+  Keep equal allocated graphic widths for CPU and visible devices; hybrid cores stretch
+  proportionally. Uniform or unknown efficiency classes use equally sized squares side by side,
+  wrapping only when needed at a 6-DIP minimum with 2-DIP reference gaps. Fit squares within the
+  existing CPU band, allowing spare width rather than increasing bar height to fill it.
   Keep RAM, both GPU engines, GPU memory, disk directions, and network
   directions identifiable. Use labels/direction cues as well as color.
 - Increasing effective bar thickness scales graphics, icons, hover text and internal spacing
@@ -305,7 +309,15 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
   peaks before UI coalescing; retain them across settings, reconnect, suspend/resume and worker
   Retry. Expose the current peak in details. Do not persist peaks, retain a history, falsify numeric
   values, or auto-benchmark to establish a scale.
-- Reflow the same metrics for horizontal/vertical bars. Enforce a documented compact
+- GPU and Network Hide choices remove those widgets and redistribute width to remaining
+  widgets. Pause collection for the hidden family, retain its device preference, last-valid
+  observations and session peaks, and re-prime it when shown without resetting unrelated
+  counters. Keep discovery available; Settings identifies hidden families as sampling paused.
+- Drives checkboxes below Network and above Edge apply with the Settings draft. Hidden drives
+  leave no widget; keep their last-valid values and session peaks without updating them. Shared
+  disk queries continue while any disk is visible and close when all are hidden; reopening
+  primes them. Keep discovery active and retain exclusions through reconnect and restart.
+- Reflow the same visible metrics for horizontal/vertical bars. Enforce a documented compact
   layout/minimum readable size rather than silently hiding processors. Provide exact
   values and statuses in accessible text/tooltips when inline numbers do not fit.
 - Respect DPI, text scaling, high contrast, and keyboard access. Static high-use glows from
