@@ -11,6 +11,8 @@ struct SettingsDraft {
     std::wstring thickness, interval;
     bool selections_valid{true};
     bool gpu_visible{true}, network_visible{true};
+    bool cpu_squares{};
+    bool show_hover_info{true}, open_task_manager_on_click{true};
     HiddenDiskIds hidden_disks;
 };
 [[nodiscard]] std::optional<Settings> settings_from_draft(const SettingsDraft &draft);
@@ -32,6 +34,7 @@ struct SettingsLayout {
     ControlBounds viewport;
     std::array<ControlBounds, 7> labels, fields;
     std::array<ControlBounds, 4> buttons;
+    std::array<ControlBounds, 3> preferences;
     ControlBounds footer_status, readings_label, readings, drives_label, drives;
     int content_height{}, scroll{}, metric_width{};
     bool scroll_footer{};

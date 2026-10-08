@@ -30,6 +30,9 @@ std::optional<Settings> settings_from_draft(const SettingsDraft &draft) {
     result.gpu_visible = draft.gpu_visible;
     result.network_visible = draft.network_visible;
     result.hidden_disks = draft.hidden_disks;
+    result.cpu_squares = draft.cpu_squares;
+    result.show_hover_info = draft.show_hover_info;
+    result.open_task_manager_on_click = draft.open_task_manager_on_click;
     result.edge = static_cast<Edge>(draft.edge);
     result.alignment = static_cast<Alignment>(draft.alignment);
     result.thickness = *thickness;
@@ -117,7 +120,13 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
         result.fields[i] = {x, y + (stacked ? px(24) : 0), std::max(1, content_width - x - margin),
                             px(25)};
     }
-    const int form_bottom = margin + 7 * row_height + gap + drive_space;
+    const int preference_y = margin + 7 * row_height + gap + drive_space;
+    const int preference_height = px(stacked ? 48 : 30);
+    for (std::size_t i = 0; i < result.preferences.size(); ++i) {
+        result.preferences[i] = {margin, preference_y + static_cast<int>(i) * preference_height,
+                                 std::max(1, content_width - 2 * margin), preference_height};
+    }
+    const int form_bottom = preference_y + 3 * preference_height + gap;
     const int table_width = std::max(1, content_width - 2 * margin);
     result.readings_label = {margin, form_bottom, table_width, px(stacked ? 42 : 26)};
     const int table_y = result.readings_label.y + result.readings_label.height;
@@ -142,6 +151,9 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
     }
     for (auto &control : result.fields) {
         control.y -= result.scroll;
+    }
+    for (auto &preference : result.preferences) {
+        preference.y -= result.scroll;
     }
     result.drives_label.y -= result.scroll;
     result.drives.y -= result.scroll;

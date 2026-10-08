@@ -18,6 +18,25 @@ void check(bool condition, const char *reason) {
 }
 void drive_settings_tests() {
     using namespace loadbar;
+    for (unsigned mask = 0; mask < 8; ++mask) {
+        Settings switches;
+        switches.cpu_squares = (mask & 1U) != 0;
+        switches.show_hover_info = (mask & 2U) != 0;
+        switches.open_task_manager_on_click = (mask & 4U) != 0;
+        check(decode_settings(encode_settings(switches)) == switches,
+              "All preference combinations round trip");
+        check(!collection_changed({}, switches),
+              "Presentation preferences do not restart providers");
+    }
+    const auto legacy = decode_settings(L"Loadbar 9 0 40 1000 \"\" \"gpu\" \"nic\" 0 1 1 0 0");
+    check(legacy && !legacy->cpu_squares && legacy->show_hover_info &&
+              legacy->open_task_manager_on_click,
+          "Existing settings receive backward-compatible interaction defaults");
+    const auto prefix10 = L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 ";
+    for (const auto *tail : {L"", L"0 1", L"2 1 1", L"0 2 1", L"0 1 -1", L"0 1 1 extra"}) {
+        check(!decode_settings(std::wstring(prefix10) + tail),
+              "Malformed preference fields are rejected");
+    }
     Settings settings;
     check(settings.hidden_disks.empty() && disk_visible(L"new", settings), "New disks are visible");
     settings.hidden_disks = {L"device\\quoted\"id", L"disconnected"};
@@ -105,8 +124,9 @@ void geometry_tests() {
                           button.x + button.width <= px(320) && button.y + button.height <= px(240),
                       "Footer stays inside window, outside clipped content");
             }
-            check(compact.readings_label.y == px(12) + 7 * px(30) + px(8),
-                  "Readings immediately follow form without a status block");
+            check(compact.readings_label.y ==
+                      compact.preferences.back().y + compact.preferences.back().height + px(8),
+                  "Readings immediately follow interaction preferences");
             check(compact.footer_status.height == 0, "Healthy footer has no message space");
             const auto notice = settings_layout(px(800), px(700), scale, retry, 0, px(17), px(36));
             check(notice.readings.height == compact.readings.height - px(36) - px(8),
@@ -168,8 +188,8 @@ void migration_tests() {
         Settings settings;
         settings.thickness = value;
         check(valid_settings(settings) && decode_settings(encode_settings(settings)) == settings &&
-                  encode_settings(settings).starts_with(L"Loadbar 9 "),
-              "Schema 7 boundaries round trip");
+                  encode_settings(settings).starts_with(L"Loadbar 10 "),
+              "Current schema boundaries round trip");
     }
     for (const int version : {1, 2, 3, 4, 5, 6, 7}) {
         for (const double size : {0.0, 1.0, 6.0, 39.5, 40.0, 40.25, 40.5, 479.5, 480.0, 481.0,
@@ -226,7 +246,7 @@ void migration_tests() {
     Settings fractional;
     fractional.thickness = 40.25;
     check(!valid_settings(fractional), "New settings reject fractional DIPs");
-    check(!decode_settings(L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
+    check(!decode_settings(L"Loadbar 11 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
 }
 void draft_tests() {
     using namespace loadbar;
@@ -310,6 +330,23 @@ struct SettingsWindowTests {
             if (!app.window_) {
                 throw std::runtime_error("Create hidden owner");
             }
+            unsigned launches{};
+            check(SetPropW(app.window_, L"Loadbar.TestLaunch", &launches) != FALSE,
+                  "Install click probe");
+            app.launch_task_manager_ = [](SHELLEXECUTEINFOW *launch) -> BOOL {
+                auto *count =
+                    static_cast<unsigned *>(GetPropW(launch->hwnd, L"Loadbar.TestLaunch"));
+                if (count && std::wstring_view(launch->lpFile).ends_with(L"\\Taskmgr.exe")) {
+                    ++*count;
+                }
+                return TRUE;
+            };
+            SendMessageW(app.window_, WM_LBUTTONUP, 0, 0);
+            app.settings_.open_task_manager_on_click = false;
+            SendMessageW(app.window_, WM_LBUTTONUP, 0, 0);
+            check(launches == 1, "Disabled click never invokes the Task Manager launcher");
+            app.settings_.open_task_manager_on_click = true;
+            RemovePropW(app.window_, L"Loadbar.TestLaunch");
             check(SetPropW(app.window_, L"Loadbar.TestTray", &tray) != FALSE,
                   "Install tray request recorder");
             app.notify_icon_ = [](DWORD operation, NOTIFYICONDATAW *data) -> BOOL {
@@ -416,6 +453,27 @@ struct SettingsWindowTests {
             check(label_colors, "Every label uses transparent text on system window background");
             SendMessageW(app.settings_window_, WM_SYSCOLORCHANGE, 0, 0);
             SendMessageW(app.settings_window_, WM_THEMECHANGED, 0, 0);
+            for (const int id : {kCpuSquares, kHoverInfo, kTaskManagerClick}) {
+                const auto box = GetDlgItem(app.settings_content_, id);
+                check(box != nullptr, "Preference checkbox exists");
+                const auto initial = SendMessageW(box, BM_GETCHECK, 0, 0);
+                check(initial == (id == kCpuSquares ? BST_UNCHECKED : BST_CHECKED),
+                      "Preference defaults preserve existing behavior");
+                SendMessageW(box, BM_CLICK, 0, 0);
+                check(app.settings_dirty_ && enabled(kApplySettings) && enabled(kCancelSettings),
+                      "Each checkbox participates in the settings draft");
+                const auto draft = settings_from_draft(app.settings_draft());
+                check(draft && (id != kCpuSquares || draft->cpu_squares) &&
+                          (id != kHoverInfo || !draft->show_hover_info) &&
+                          (id != kTaskManagerClick || !draft->open_task_manager_on_click),
+                      "Checkbox value survives draft conversion");
+                app.populate_devices(false);
+                check(settings_from_draft(app.settings_draft()) == draft,
+                      "Device refresh preserves preference drafts");
+                app.cancel_settings();
+                check(SendMessageW(box, BM_GETCHECK, 0, 0) == initial && !enabled(kApplySettings),
+                      "Cancel restores preference and dirty state");
+            }
             // Real EN_CHANGE travels through the content host to the Settings callback.
             SetWindowTextW(field(4), L"60");
             check(enabled(kApplySettings) && enabled(kCancelSettings),
@@ -688,7 +746,7 @@ struct SettingsWindowTests {
             SendMessageW(app.settings_window_, WM_SIZE, SIZE_RESTORED, MAKELPARAM(900, 700));
             check(!app.settings_minimized_, "Ordinary resize does not rearm restore refresh");
             const auto font = app.settings_font_;
-            SetWindowPos(app.settings_window_, nullptr, 0, 0, 1000, 900,
+            SetWindowPos(app.settings_window_, nullptr, 0, 0, 1000, 1200,
                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             RECT large{};
             GetWindowRect(GetDlgItem(app.settings_content_, kDetailsControl), &large);

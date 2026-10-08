@@ -1,5 +1,141 @@
 # Testing and verification
 
+## 1.1.3 publication build
+
+On 2026-10-08, `pwsh -NoProfile -File scripts/package-release.ps1` built version 1.1.3,
+passed all four Release CTest suites (2.84 s), and verified the single-entry ZIP against
+the tested executable. Debug, RelWithDebInfo and ASan were reconfigured and rebuilt with
+the release version and passed 4/4 suites each (8.05 s, 2.92 s and 14.10 s respectively).
+
+Additional commands run:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check analyze
+dumpbin /dependents out/release/1.1.3/Loadbar.exe
+dumpbin /headers out/release/1.1.3/Loadbar.exe
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+Formatting and MSVC analysis passed. The implementation's full/targeted clang-tidy evidence
+is recorded below; publication changed version metadata and documentation only. Import/PE
+inspection and package hashes are in [packaging.md](packaging.md). A fresh independent
+adversarial review and final package review were clean. The owner reports successful manual
+use; the detailed interactive matrix, hardware accuracy, performance/soak and clean-machine
+packaging checks remain pending and are disclosed in the release notes.
+
+## Edge-aware vertical layout (1.1.3)
+
+On 2026-10-08, Debug, Release, RelWithDebInfo and ASan builds and all four CTest suites passed
+with the pinned toolchain. Geometry tests cover all four edges, 128 logical processors
+across groups, both shape settings, 40–640-DIP requests and text scales 1/1.5/2.25.
+They assert complete readable tiles, containment, squares, P/E sides, strip-thickness fitting
+and equal remaining device allocations. A review-found 128-thread uniform/unknown-class
+case reproduced unused cross-strip space; the fix fits occupied rows and its regression
+passes on all four edges. A strict equality assertion was corrected after
+observing that square mode can enlarge tiles further than rectangle mode at 120 DIPs;
+the regression requires that square mode never shrinks their cross-strip dimension.
+
+Offscreen tests check Left/Right cache switches against a fresh renderer, text rotation,
+hover suppression, DPI/text-scale transitions and restoration after injected text failure.
+A high-contrast CPU overlay comparison verifies opposite quarter-turns at pixel level.
+New 60 × 1400-pixel fixtures were visually inspected on both edges:
+`render-fixtures/{left,right}-60-{squares,rectangles}-{normal,hover}.png` under each build.
+These use synthetic readings through the production renderer, not hardware observations.
+
+Commands for this update (from the x64 developer environment):
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --preset windows-x64-debug
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+foreach ($preset in @('windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target loadbar_readme_frames format-check tidy analyze
+# After the review-found uniform-grid fix, rebuild/test the three configurations above, then:
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release
+ctest --preset windows-x64-release --output-on-failure
+cmake --build --preset windows-x64-debug --target loadbar_readme_frames format-check analyze
+clang-tidy -p out/build/windows-x64-debug/tidy-commands src/model/layout.cpp tests/design.cpp
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+git -c core.safecrlf=false diff --check
+```
+
+Final CTest results were 4/4 in Debug (8.59 s), Release (3.00 s), RelWithDebInfo
+(3.06 s) and ASan (14.15 s). Format-check, MSVC analysis, the optional README-frame
+helper build and the final targeted clang-tidy rerun passed. Release dependency inspection
+found only Windows components, with no VC++ runtime DLL import. Diff checking passed.
+
+The complete clang-tidy pass succeeded before the uniform-grid follow-up. Its targeted rerun
+then flagged an intentional integer row calculation embedded in a floating-point expression;
+storing the row as an integer before conversion resolved it without suppression or behavior
+change. Two independent consecutive reviews were clean after the fitting fix and both
+confirmed that final expression adjustment.
+
+Manual acceptance: use Right at 60 DIPs, toggle squares, hover each widget, then switch to
+Left. Confirm top-down/right and bottom-up/left inline text, opposite P/E sides, squares
+using the strip thickness, equal device allocations, upward meters and upright icons below.
+Repeat at 120 DIPs and available mixed-DPI/text-scale settings. Check disabled hover, menu,
+Settings and clean Exit/work-area restoration. Live AppBar, hardware accuracy, production
+performance/soak and standalone packaging checks remain pending; no live bar was launched.
+
+## GPU fallback, CPU squares and interaction preferences (1.1.3)
+
+All four suites passed in Debug, Release, RelWithDebInfo and ASan on 2026-10-08 using the
+pinned toolchain. New regression coverage includes source priority, engine-query failure
+isolation, memory retention with original scope/capacity/age, adapter changes, schema-10
+migration and malformed values, checkbox drafts/Cancel, a stubbed Task Manager launcher,
+square P/E tiles, vertical 0/50/100% pixels, hover suppression and cached-layout transitions.
+Tests use fake readings and offscreen/hidden windows; they do not validate hardware accuracy.
+
+Commands run from the repository root:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --preset windows-x64-debug
+cmake --preset windows-x64-release
+cmake --preset windows-x64-relwithdebinfo
+cmake --preset windows-x64-asan
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check tidy analyze
+clang-tidy -p out/build/windows-x64-debug/tidy-commands tests/continuity.cpp
+cmake --build --preset windows-x64-debug --target format-check analyze
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+git diff --check
+```
+
+The first tidy pass found two test-code issues (unchecked optional access and vector capacity);
+both were corrected. A Debug configure overlapping the analysis target encountered a Ninja
+metadata lock; a subsequent isolated configure succeeded. Format-check and MSVC analysis
+passed. All project files were checked by clang-tidy; the last remaining optional-access
+warning needed a named reference for the analyzer to prove its guard, and the final targeted
+rerun above passed. No diagnostics were suppressed to obtain a pass. Release imports contain
+only Windows components, with no VC++ runtime DLL dependency; this is not a clean-machine
+packaging test. Two independent consecutive final adversarial reviews were clean; both
+confirmed the final test-only guard adjustment.
+
+CTest writes previews to `out/build/windows-x64-release/render-fixtures/`. New files use
+`horizontal-60-` or `vertical-60-`, then `squares-`/`rectangles-` and
+`vram.png`/`shared.png`/`engines-only.png`. They are 1400 × 60 or 60 × 1400 pixels at 96 DPI,
+rendered through production code with synthetic readings and no hover text. The square-mode
+horizontal/vertical previews were visually inspected. No live bar was launched or altered;
+manual AppBar/DPI interaction, GPU accuracy, performance/soak and standalone packaging remain
+pending. The existing running copy was left alone.
+
 ## 1.1.1 publication build
 
 `pwsh -NoProfile -File scripts/package-release.ps1` configured and built the normal
@@ -237,6 +373,9 @@ separately before treating any reading as accurate.
 
 | Procedure | Expected observation |
 | --- | --- |
+| Toggle CPU squares, hover info and click action; Cancel, Apply, restart | Defaults off/on/on; draft and persistence work; squares retain P/E sizes; disabled hover has no overlays/bar tooltip; disabled click does nothing; tray/Settings/Exit remain usable |
+| Left/right edges at 40/60/120 DIPs | Every thread remains visible; icons below graphics; all meters fill upward; non-CPU widgets share remaining height |
+| Dedicated memory absent, shared available; both fail after a valid observation | Shared label/capacity used; dual failure retains last observation with original age; never-observed memory uses two-engine layout |
 | Maximize/Snap on three displays with taskbar/another AppBar | Only the selected monitor reserves the negotiated strip; no drift/overlap |
 | In Drives, uncheck one, Cancel, uncheck again and Apply; hide all, then show one | Checkbox draft/actions work; remaining widgets expand in both orientations; shared counters continue until all are hidden, then prime on showing |
 | With Settings open, connect a new physical disk; disconnect/reconnect an excluded disk; restart | New identity is checked; excluded identity stays unchecked; catalog refresh preserves draft/focus/scroll; saved exclusions survive restart |

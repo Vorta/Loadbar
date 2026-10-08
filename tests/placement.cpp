@@ -68,8 +68,9 @@ std::vector<loadbar::Processor> hybrid_processors() {
 void run_placement_tests() {
     using namespace loadbar;
     const auto processors = hybrid_processors();
-    const auto full_minimum = minimum_thickness(600, 300, true, processors, 1, {}, 2);
-    const auto short_minimum = minimum_thickness(560, 300, true, processors, 1, {}, 2);
+    const auto full_minimum = minimum_thickness(600, 300, loadbar::Edge::top, processors, 1, {}, 2);
+    const auto short_minimum =
+        minimum_thickness(560, 300, loadbar::Edge::top, processors, 1, {}, 2);
     require(short_minimum > full_minimum,
             "Fixture exercises a shortened edge needing extra thickness");
     for (const unsigned dpi : {96U, 120U, 144U, 192U}) {
@@ -100,7 +101,7 @@ void run_placement_tests() {
                     require(placed && make_layout(
                                           static_cast<float>(placed->right - placed->left) / scale,
                                           static_cast<float>(placed->bottom - placed->top) / scale,
-                                          along_x, processors, 1, settings, 2)
+                                          edge, processors, 1, settings, 2)
                                           .fits,
                             "Every edge and DPI uses a readable negotiated region");
                     require(settings == saved && shell.adds == 1 && shell.queries <= 4,
@@ -124,7 +125,7 @@ void run_placement_tests() {
                                 make_layout(
                                     static_cast<float>(expanded->right - expanded->left) / scale,
                                     static_cast<float>(expanded->bottom - expanded->top) / scale,
-                                    along_x, processors, 1, settings, 2)
+                                    edge, processors, 1, settings, 2)
                                     .fits,
                             "Edge growth reconsiders the settled constraint");
                     settings.thickness = 200;
@@ -203,8 +204,8 @@ void run_placement_tests() {
     require(changing.queries <= 4 && changing.sets <= 4, "Changing Shell replies cannot spin");
     if (result) {
         require(make_layout(static_cast<float>(result->right - result->left),
-                            static_cast<float>(result->bottom - result->top), true, processors, 1,
-                            settings, 2)
+                            static_cast<float>(result->bottom - result->top), loadbar::Edge::top,
+                            processors, 1, settings, 2)
                     .fits,
                 "A bounded retry may only succeed with a complete readable layout");
     }

@@ -85,6 +85,7 @@ int Application::run() {
         tool.lpszText = tooltip_text_.data();
         SendMessageW(tooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
         SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 600);
+        SendMessageW(tooltip_, TTM_ACTIVATE, settings_.show_hover_info, 0);
         SendMessageW(tooltip_, TTM_SETDELAYTIME, TTDT_INITIAL, 800);
         SendMessageW(tooltip_, TTM_SETDELAYTIME, TTDT_RESHOW, 800);
     }
@@ -159,7 +160,7 @@ void Application::place_bar() {
             throw std::runtime_error("Invalid monitor for thickness migration");
         }
         const auto edge = resolve_edge(settings_.edge, monitor.bounds);
-        horizontal_ = horizontal(edge);
+        effective_edge_ = edge;
         const auto rectangle =
             place_readable_bar(appbar_, monitor, settings_, snapshot_.processors, text_scale_,
                                disk_widget_count(snapshot_.disks, settings_));
@@ -226,7 +227,7 @@ void Application::remove_tray() noexcept {
     }
 }
 void Application::update_tooltip() {
-    if (!tooltip_ || !window_) {
+    if (!tooltip_ || !window_ || !settings_.show_hover_info) {
         return;
     }
     POINT point{};
@@ -281,7 +282,7 @@ void Application::schedule_refresh() {
     // Age text needs ticks only while it can be read. Valid sampling needs no independent
     // periodic UI wakeups; each accepted sample moves the stale deadline forward.
     if (!paused_ &&
-        ((hovered_ && IsWindowVisible(window_)) ||
+        ((settings_.show_hover_info && hovered_ && IsWindowVisible(window_)) ||
          (settings_window_ && IsWindowVisible(settings_window_) && !IsIconic(settings_window_)))) {
         const auto age = next_retention_deadline(snapshot_, now, settings_.interval_ms, settings_);
         if (age && (!deadline || *age < *deadline)) {
@@ -446,6 +447,11 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             return 0;
         }
         if (!command_activates(notification, lparam != 0)) {
+            return 0;
+        }
+        if (window == settings_window_ && lparam != 0 && command >= kCpuSquares &&
+            command <= kTaskManagerClick) {
+            update_settings_actions();
             return 0;
         }
         if (command == kApplySettings || (window == settings_window_ && command == IDOK)) {
@@ -773,7 +779,9 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window_, 0};
             if (TrackMouseEvent(&tracking)) {
                 hovered_ = true;
-                InvalidateRect(window_, nullptr, FALSE);
+                if (settings_.show_hover_info) {
+                    InvalidateRect(window_, nullptr, FALSE);
+                }
                 schedule_refresh();
             }
         }
@@ -782,7 +790,9 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
     case WM_MOUSELEAVE:
         hovered_ = false;
         schedule_refresh();
-        InvalidateRect(window_, nullptr, FALSE);
+        if (settings_.show_hover_info) {
+            InvalidateRect(window_, nullptr, FALSE);
+        }
         if (tooltip_) {
             SendMessageW(tooltip_, TTM_POP, 0, 0);
         }
@@ -835,6 +845,9 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
         }
         return 0;
     case WM_LBUTTONUP: {
+        if (!settings_.open_task_manager_on_click) {
+            return 0;
+        }
         std::wstring path(32768, L'\0');
         const auto length = GetSystemDirectoryW(path.data(), static_cast<UINT>(path.size()));
         if (length == 0 || length >= path.size()) {
@@ -850,7 +863,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
         launch.hwnd = window_;
         launch.lpFile = path.c_str();
         launch.nShow = SW_SHOWNORMAL;
-        if (!ShellExecuteExW(&launch)) {
+        if (!launch_task_manager_(&launch)) {
             const auto code = GetLastError();
             MessageBoxW(window_, error_text({L"Open Task Manager", code}).c_str(), L"Loadbar",
                         MB_OK | MB_ICONWARNING);
@@ -872,9 +885,10 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
-        const auto rendered = paused_ ? S_OK
-                                      : renderer_.paint(window, snapshot_, settings_, horizontal_,
-                                                        fallback_, text_scale_, hovered_);
+        const auto rendered = paused_
+                                  ? S_OK
+                                  : renderer_.paint(window, snapshot_, settings_, effective_edge_,
+                                                    fallback_, text_scale_, hovered_);
         EndPaint(window, &paint);
         update_tooltip();
         if (FAILED(rendered) && rendered != D2DERR_RECREATE_TARGET) {

@@ -93,6 +93,7 @@ struct Snapshot {
     Metric ram_used_bytes{0, Status::unavailable, Unit::bytes, {}, {}, {}};
     std::uint64_t ram_total_bytes{};
 };
+[[nodiscard]] bool gpu_memory_visible(const Snapshot &snapshot) noexcept;
 void set_physical_memory(Snapshot &snapshot, std::uint64_t total, std::uint64_t available,
                          Clock::time_point now);
 [[nodiscard]] const wchar_t *gauge_name(Gauge gauge) noexcept;

@@ -16,12 +16,12 @@ class Renderer {
     using SystemColorReader = std::function<COLORREF(int)>;
     explicit Renderer(ResourceProbe probe = {}, SystemColorReader colors = {})
         : resource_probe_(std::move(probe)), system_colors_(std::move(colors)) {}
-    HRESULT paint(HWND window, const Snapshot &snapshot, const Settings &settings, bool horizontal,
+    HRESULT paint(HWND window, const Snapshot &snapshot, const Settings &settings, Edge edge,
                   bool fallback, float text_scale, bool hover = false);
     // The offscreen test uses precisely the production drawing path; no HWND or providers.
     HRESULT render_to(ID2D1RenderTarget *target, const Snapshot &snapshot, const Settings &settings,
-                      bool horizontal, bool fallback, float text_scale, bool hover,
-                      bool high_contrast, Clock::time_point now);
+                      Edge edge, bool fallback, float text_scale, bool hover, bool high_contrast,
+                      Clock::time_point now);
     void discard() noexcept;
     void preferences_changed() noexcept;
     void invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
@@ -80,7 +80,9 @@ class Renderer {
     bool disk_layout_changed(const Snapshot &snapshot, const Settings &settings) const;
     std::vector<std::tuple<unsigned, ProcessorId, bool, std::optional<unsigned>>> topology_;
     float layout_width_{}, layout_height_{}, layout_scale_{}, layout_dpi_{};
-    bool layout_horizontal_{}, layout_gpu_visible_{true}, layout_network_visible_{true};
+    Edge layout_edge_{Edge::automatic};
+    bool layout_gpu_visible_{true}, layout_network_visible_{true};
+    bool layout_cpu_squares_{}, layout_gpu_memory_{};
     Alignment layout_alignment_{};
     float content_scale_{};
     bool high_contrast_{};

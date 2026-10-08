@@ -54,6 +54,7 @@ class Application {
     decltype(&InvalidateRect) resize_invalidate_{&InvalidateRect};
     // Replace only in hidden-window tests to inspect requests without changing the tray.
     decltype(&Shell_NotifyIconW) notify_icon_{&Shell_NotifyIconW};
+    decltype(&ShellExecuteExW) launch_task_manager_{&ShellExecuteExW};
     HINSTANCE instance_{};
     HWND window_{};
     HWND settings_window_{};
@@ -102,7 +103,8 @@ class Application {
     HFONT settings_font_{};
     int settings_font_height_{};
     float text_scale_{1};
-    bool horizontal_{}, paused_{};
+    Edge effective_edge_{Edge::right};
+    bool paused_{};
     bool hovered_{};
     bool selection_prompted_{};
     ActivityState activity_;

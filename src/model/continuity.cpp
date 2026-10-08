@@ -8,6 +8,13 @@ namespace {
 bool usable(const Metric &metric) {
     return metric.status == Status::valid && std::isfinite(metric.value) && metric.value >= 0;
 }
+bool coherent_memory(const Metric &percent, const Metric &bytes, std::uint64_t capacity) {
+    return usable(percent) && usable(bytes) && percent.unit == Unit::percent &&
+           bytes.unit == Unit::bytes && capacity > 0 &&
+           bytes.value <= static_cast<double>(capacity) && percent.timestamp == bytes.timestamp &&
+           percent.interval == bytes.interval &&
+           std::abs(percent.value - 100 * bytes.value / static_cast<double>(capacity)) < 0.000001;
+}
 } // namespace
 void DisplayContinuity::observe(Metric &metric, Gauge kind) {
     metric.retained.reset();
@@ -49,11 +56,7 @@ void DisplayContinuity::memory(Metric &percent, Metric &bytes, std::uint64_t &ca
     }
     const auto key = std::pair{std::wstring_view(percent.identity), scope};
     auto found = memories_.find(key);
-    const bool coherent =
-        usable(percent) && usable(bytes) && percent.unit == Unit::percent &&
-        bytes.unit == Unit::bytes && capacity > 0 && bytes.value <= static_cast<double>(capacity) &&
-        percent.timestamp == bytes.timestamp && percent.interval == bytes.interval &&
-        std::abs(percent.value - 100 * bytes.value / static_cast<double>(capacity)) < 0.000001;
+    const bool coherent = coherent_memory(percent, bytes, capacity);
     if (coherent) {
         const Memory value{
             {percent.value, percent.timestamp}, {bytes.value, bytes.timestamp}, capacity};
@@ -119,6 +122,22 @@ void DisplayContinuity::observe(Snapshot &snapshot, const Settings &settings) {
             previous.scope.clear();
         }
     };
+    // Failed discovery/queries may propose another memory scope. Keep the last selected
+    // observation's scope, bytes and capacity together until a fresh source is usable.
+    if (!coherent_memory(snapshot.gauges[3], snapshot.gpu_memory_bytes,
+                         snapshot.gpu_memory_capacity)) {
+        if (snapshot.gauges[3].status == Status::valid ||
+            snapshot.gpu_memory_bytes.status == Status::valid) {
+            snapshot.gauges[3].status = snapshot.gpu_memory_bytes.status = Status::error;
+            snapshot.gauges[3].detail += L"; inconsistent memory observation";
+        }
+        const auto known = known_gpus_.find(snapshot.gpu_id);
+        if (known != known_gpus_.end() &&
+            memories_.contains(std::pair{std::wstring_view(snapshot.gpu_id),
+                                         std::wstring_view(known->second.scope)})) {
+            snapshot.gpu_memory_label = known->second.scope;
+        }
+    }
     selection(gpu_, known_gpus_, settings.gpu_id, snapshot.gpu_id, snapshot.gpu_label,
               &snapshot.gpu_memory_label);
     selection(network_, known_networks_, settings.network_id, snapshot.network_id,

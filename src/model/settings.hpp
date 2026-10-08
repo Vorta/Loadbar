@@ -34,6 +34,8 @@ struct Settings {
     std::wstring network_id;
     Alignment alignment{Alignment::start};
     bool gpu_visible{true}, network_visible{true};
+    bool cpu_squares{};
+    bool show_hover_info{true}, open_task_manager_on_click{true};
     HiddenDiskIds hidden_disks;
     bool operator==(const Settings &) const = default;
 };

@@ -70,7 +70,7 @@ void reading_tests() {
     auto first = sample();
     peaks.observe(first);
     state.observe(first);
-    const auto layout = make_layout(1920, 40, true, first.processors, 1, {}, 1);
+    const auto layout = make_layout(1920, 40, loadbar::Edge::top, first.processors, 1, {}, 1);
     require(core_metric(layout.cores[0], first, first.timestamp, 1000).value == 20 &&
                 core_metric(layout.cores[1], first, first.timestamp, 1000).value == 80,
             "Logical processors start with their own values");
@@ -108,7 +108,7 @@ void recovery_tests() {
     DisplayContinuity state;
     auto first = sample();
     state.observe(first);
-    const auto layout = make_layout(1920, 40, true, first.processors, 1, {}, 1);
+    const auto layout = make_layout(1920, 40, loadbar::Edge::top, first.processors, 1, {}, 1);
     auto partial = sample(3);
     partial.processors[0].utilization.value = 95;
     partial.processors[1].utilization.status = Status::error;
@@ -140,7 +140,9 @@ void recovery_tests() {
     new_scope.gpu_memory_label = L"GPU shared";
     set_snapshot_status(new_scope, Status::error, L"New scope absent");
     state.observe(new_scope);
-    require(!new_scope.gauges[3].retained, "GPU memory never crosses dedicated/shared scopes");
+    require(new_scope.gauges[3].retained && new_scope.gpu_memory_label == L"GPU VRAM" &&
+                new_scope.gpu_memory_capacity == 8ULL * 1073741824,
+            "An unavailable new scope retains the last observation with its original scope");
     auto new_device = sample(7);
     new_device.gpu_id = L"gpu-b";
     new_device.network_id = L"nic-b";
@@ -192,9 +194,86 @@ void coalescing_tests() {
     next_launch.observe(cold);
     require(!cold.gauges[1].retained, "Retained samples are not persisted across launches");
 }
+void gpu_fallback_tests() {
+    Device device{DeviceKind::gpu, L"gpu-a", L"Test GPU", 42, 100, 200, false, true};
+    DisplayContinuity continuity;
+    Settings settings;
+    settings.gpu_id = device.id;
+    int second{};
+    const auto collect = [&](Status dedicated_status, Status shared_status, double dedicated_value,
+                             double shared_value, bool fail_engines = false) {
+        Snapshot snapshot;
+        snapshot.processors.push_back({{0, 0}, 0, true, {}});
+        const auto now = Clock::time_point{} + std::chrono::seconds(++second);
+        const auto rows = [&](Status status,
+                              double value) -> Result<std::vector<std::vector<CounterItem>>> {
+            return std::vector<std::vector<CounterItem>>{
+                {{L"luid_0x0_0x2a_phys_0", {value, status, Unit::bytes, now, {}, L"test"}}}};
+        };
+        collect_gpu_readings(
+            snapshot, device, now,
+            [&]() -> Result<std::vector<std::vector<CounterItem>>> {
+                if (fail_engines) {
+                    throw std::runtime_error("injected engine failure");
+                }
+                return std::vector<std::vector<CounterItem>>(1);
+            },
+            [&] { return rows(dedicated_status, dedicated_value); },
+            [&] { return rows(shared_status, shared_value); });
+        continuity.observe(snapshot, settings);
+        return snapshot;
+    };
+    auto snapshot = collect(Status::unavailable, Status::unavailable, 0, 0);
+    require(!gpu_memory_visible(snapshot), "No memory source omits the never-observed meter");
+    for (bool horizontal : {true, false}) {
+        const auto layout = make_snapshot_layout(
+            horizontal ? 1400.0F : 60.0F, horizontal ? 60.0F : 1400.0F,
+            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, settings);
+        require(layout.fits, "GPU fallback layout fits before accessing blocks");
+        const auto &gpu = layout.blocks[2];
+        require(layout.fits && gpu.types[0] == Gauge::gpu_3d && gpu.types[1] == Gauge::gpu_decode &&
+                    gpu.types[2] == Gauge::count,
+                "Absent GPU memory produces the two-engine layout");
+        const float major = horizontal ? gpu.meters[0].height : gpu.meters[0].width;
+        const float minor = horizontal ? gpu.meters[1].height : gpu.meters[1].width;
+        require(std::abs(major / minor - 14.0F / 6) < 0.001F, "Engine-only GPU uses 14/6 split");
+    }
+    snapshot = collect(Status::unavailable, Status::valid, 0, 100, true);
+    require(gpu_memory_visible(snapshot) && snapshot.gpu_memory_label == L"GPU shared" &&
+                snapshot.gpu_memory_capacity == 200 && snapshot.gauges[3].value == 50 &&
+                snapshot.gauges[1].status == Status::error,
+            "Engine query failure does not block shared memory fallback");
+    const auto observed = snapshot.gauges[3].timestamp;
+    snapshot = collect(Status::error, Status::error, 0, 0);
+    const auto &retained = snapshot.gauges[3].retained;
+    require(gpu_memory_visible(snapshot) && snapshot.gpu_memory_label == L"GPU shared" &&
+                snapshot.gpu_memory_capacity == 200 &&
+                presented_metric(snapshot.gauges[3]).value == 50 && retained &&
+                retained->timestamp == observed,
+            "Dual failure preserves last displayed memory scope/capacity/age");
+    snapshot = collect(Status::valid, Status::valid, 25, 100);
+    require(snapshot.gpu_memory_label == L"GPU VRAM" && snapshot.gauges[3].value == 25 &&
+                snapshot.gpu_memory_capacity == 100,
+            "Fresh dedicated memory wins over shared memory");
+    snapshot = collect(Status::unavailable, Status::valid, 0, 80);
+    require(snapshot.gpu_memory_label == L"GPU shared" && snapshot.gauges[3].value == 40 &&
+                snapshot.gpu_memory_bytes.value == 80,
+            "Fresh shared memory wins over retained dedicated memory");
+    snapshot = collect(Status::valid, Status::valid, 0, 100);
+    require(gpu_memory_visible(snapshot) && snapshot.gpu_memory_label == L"GPU VRAM" &&
+                snapshot.gauges[3].value == 0,
+            "Observed dedicated idle zero is valid and visible");
+    device.id = settings.gpu_id = L"gpu-b";
+    snapshot = collect(Status::unavailable, Status::unavailable, 0, 0);
+    require(!gpu_memory_visible(snapshot), "Another GPU cannot inherit the memory meter");
+    device.id = settings.gpu_id = L"gpu-a";
+    snapshot = collect(Status::warming_up, Status::warming_up, 0, 0);
+    require(gpu_memory_visible(snapshot) && snapshot.gpu_memory_label == L"GPU VRAM",
+            "Reconnect/re-prime preserves the adapter's last selected scope");
+}
 void gpu_fault_tests() {
     for (bool integrated : {false, true}) {
-        for (int stage = 0; stage < (integrated ? 3 : 2); ++stage) {
+        for (int stage = 0; stage < 3; ++stage) {
             DisplayContinuity state;
             auto first = sample();
             first.gpu_memory_label = integrated ? L"GPU shared" : L"GPU VRAM";
@@ -211,7 +290,7 @@ void gpu_fault_tests() {
             };
             collect_gpu_readings(failed, device, failed.timestamp, read, read, read);
             state.observe(failed);
-            require(failed.gauges[3].status == Status::error &&
+            require(failed.gauges[3].status == (stage == 0 ? Status::unavailable : Status::error) &&
                         failed.gpu_memory_label == first.gpu_memory_label &&
                         presented_metric(failed.gauges[3]).value == 50 &&
                         presented_metric(failed.gpu_memory_bytes).value == 4.0 * 1073741824 &&
@@ -392,8 +471,8 @@ void thickness_tests() {
     const auto larger = resolve_thickness(settings, monitor, 144, 80);
     require(larger && larger->effective == 80, "Topology changes can raise the readable minimum");
     auto processors = sample().processors;
-    const auto compact = make_layout(1920, 40, true, processors, 1);
-    const auto thick = make_layout(1920, 80, true, processors, 1);
+    const auto compact = make_layout(1920, 40, loadbar::Edge::top, processors, 1);
+    const auto thick = make_layout(1920, 80, loadbar::Edge::top, processors, 1);
     require(compact.fits && thick.fits &&
                 compact.blocks[1].graphic.height < thick.blocks[1].graphic.height &&
                 compact.blocks[1].icon.height < thick.blocks[1].icon.height,
@@ -406,7 +485,7 @@ void appearance_tests() {
             "Exact disk hues");
     const auto old = decode_settings(L"Loadbar 4 2 6 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 1");
     require(old && encode_settings(*old) ==
-                       L"Loadbar 9 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 0 0",
+                       L"Loadbar 10 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 0 0 0 1 1",
             "Migration retires appearance switches and raises old sizes to 40 DIPs");
     require(!decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 1 0 0 0") &&
                 !decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 3"),
@@ -418,6 +497,7 @@ void run_continuity_tests() {
     recovery_tests();
     coalescing_tests();
     gpu_fault_tests();
+    gpu_fallback_tests();
     selection_and_failure_tests();
     thickness_tests();
     appearance_tests();

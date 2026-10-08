@@ -12,6 +12,9 @@ inline constexpr int kFirstField = 1000;
 inline constexpr int kFooterStatus = 1020;
 inline constexpr int kDetailsControl = 1021;
 inline constexpr int kDrivesControl = 1022;
+inline constexpr int kCpuSquares = 1023;
+inline constexpr int kHoverInfo = 1024;
+inline constexpr int kTaskManagerClick = 1025;
 inline constexpr int kDrivesLabel = 2008;
 inline constexpr int kFirstLabel = 2000;
 } // namespace loadbar

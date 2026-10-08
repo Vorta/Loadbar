@@ -194,14 +194,21 @@ An empty requested type is unavailable, not inferred idle. Raw values above 100 
 details/numbers with a diagnostic note; only fill is clipped. Driver-specific instance formats
 that do not parse cannot become a misleading healthy value.
 
-Discrete memory uses the selected `\GPU Adapter Memory(*)\Dedicated Usage` row divided by
-matching DXGI dedicated capacity. Multiple physical nodes or duplicate rows are rejected. It
-does not query process budgets/CurrentUsage or sum process memory. On integrated adapters the
-main meter is labeled GPU shared and uses adapter-wide Shared Usage against its reported DXGI
-shared-memory limit, only when physical scope is verified. Dedicated usage is separately labeled
-in its detail text. This shared limit is not physical VRAM and is not substituted system RAM.
-Unknown capacity, multiple physical nodes or unknown classification makes the memory meter
-unavailable. Integrated/linked-adapter correctness still requires hardware comparison.
+GPU memory first uses the selected `\GPU Adapter Memory(*)\Dedicated Usage` row divided
+by matching DXGI dedicated capacity. If that observation is unavailable, warming, stale or invalid,
+it tries adapter-wide `Shared Usage` against the selected adapter's DXGI shared-memory limit.
+Multiple physical nodes, duplicate rows, unknown scope and zero capacity are rejected separately
+for each source. Engine-query exceptions do not suppress memory queries. No process budgets,
+CurrentUsage, process-memory sums or system-RAM substitution are used.
+
+The selected meter is labeled **GPU VRAM** or **GPU shared**. Shared memory describes the adapter's
+reported shared-system-memory limit, not physical VRAM; see [DXGI adapter metadata](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ns-dxgi-dxgi_adapter_desc).
+Fresh shared data takes precedence over retained dedicated data. If both fail, the last displayed
+observation survives with its matching bytes, percentage, capacity, scope and original timestamp.
+Retention is bounded and keyed by stable adapter identity; Hide, reconnect and Retry preserve it.
+Before the first valid observation, the memory bar is omitted and the GPU uses only 3D/decode.
+Settings still exposes the raw memory failure. Integrated/linked-adapter accuracy remains a
+hardware validation item.
 
 ## Evidence and limitations
 

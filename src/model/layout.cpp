@@ -1,4 +1,5 @@
 #include "model/layout.hpp"
+#include "model/geometry.hpp"
 #include "model/presentation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -28,7 +29,7 @@ struct CpuGrid {
     float band{22}, minimum_width{48}, preferred_width{48};
     bool uniform{};
 };
-CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
+CpuGrid cpu_grid(const std::vector<Processor> &processors, float width, bool squares) {
     CpuGrid result;
     std::vector<Core> cores;
     cores.reserve(processors.size());
@@ -57,7 +58,7 @@ CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
         const float side = std::min((width + 2) / static_cast<float>(columns) - 2,
                                     (result.band + 2) / static_cast<float>(std::max(1, rows)) - 2);
         result.preferred_width =
-            cores.empty() ? 48.0F : static_cast<float>(columns) * (side + 2) - 2;
+            cores.empty() ? 48.0F : std::min(width, static_cast<float>(columns) * (side + 2) - 2);
         for (std::size_t i = 0; i < cores.size(); ++i) {
             const auto &core = cores[i];
             const auto row = static_cast<int>(i) / columns;
@@ -79,7 +80,8 @@ CpuGrid cpu_grid(const std::vector<Processor> &processors, float width) {
     result.minimum_width = static_cast<float>(columns) * 16.0F - 2;
     // Preserve the 2:1 class width relationship without stretching a small CPU over
     // a device-sized allocation. At the reference scale P/E tiles are 22/10 DIPs wide.
-    result.preferred_width = std::min(width, static_cast<float>(columns) * 24 - 2);
+    result.preferred_width =
+        squares ? result.minimum_width : std::min(width, static_cast<float>(columns) * 24 - 2);
     int column{};
     float y{}, row_height{};
     std::optional<unsigned> previous;
@@ -165,6 +167,25 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
         kinds.push_back(4);
     }
     const auto count = static_cast<int>(kinds.size());
+    if (!horizontal) {
+        const float available = w - 18;
+        if (available < 22) {
+            return std::nullopt;
+        }
+        const float overhead =
+            22 + static_cast<float>(count) * 21 + static_cast<float>(count - 1) * (22 + 12);
+        const float budget = h - overhead;
+        if (budget < 48) {
+            return std::nullopt;
+        }
+        auto cpu = cpu_grid(processors, budget, settings.cpu_squares);
+        if (cpu.band > available || cpu.preferred_width > budget) {
+            return std::nullopt;
+        }
+        const float minimum_w = 18 + cpu.band;
+        const float used_h = overhead + cpu.preferred_width;
+        return LayoutPlan{std::move(cpu), 1, count, std::move(kinds), minimum_w, used_h};
+    }
     for (int cols = horizontal ? count : 1; cols >= 1; --cols) {
         const float overhead =
             22 + static_cast<float>(cols - 1) * 12 + (cols == count ? 13.0F : 0.0F);
@@ -174,7 +195,7 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
             (cols < count && graphics < static_cast<float>(cols) * 48)) {
             continue;
         }
-        auto cpu = cpu_grid(processors, cpu_budget);
+        auto cpu = cpu_grid(processors, cpu_budget, settings.cpu_squares);
         if (cpu.minimum_width > cpu_budget) {
             continue;
         }
@@ -226,8 +247,165 @@ std::optional<CompactLayout> compact_minimum(float length, float maximum, bool h
     }
     return CompactLayout{static_cast<float>(low), std::move(*plan)};
 }
+struct FittedCpu {
+    CpuGrid grid;
+    float factor{1};
+};
+FittedCpu fill_uniform_grid(FittedCpu fitted, float length, float thickness) {
+    auto &grid = fitted.grid;
+    if (!grid.uniform || grid.cells.empty()) {
+        return fitted;
+    }
+    const auto count = static_cast<int>(grid.cells.size());
+    const float gap = 2 * fitted.factor;
+    const int maximum_rows =
+        std::min(count, static_cast<int>((thickness + gap) / (6 * fitted.factor + gap)));
+    // The uniform baseline reserves at least 22 DIPs even when its tiles occupy less.
+    // Try complete row arrangements so explicit square mode fills the actual band.
+    for (int rows = 1; rows <= maximum_rows; ++rows) {
+        const int columns = (count + rows - 1) / rows;
+        if ((count + columns - 1) / columns != rows) {
+            continue;
+        }
+        const float side =
+            (thickness - static_cast<float>(rows - 1) * gap) / static_cast<float>(rows);
+        const float extent = static_cast<float>(columns) * (side + gap) - gap;
+        if (extent > length) {
+            continue;
+        }
+        const float reference_side = side / fitted.factor;
+        grid.band = thickness / fitted.factor;
+        grid.preferred_width = extent / fitted.factor;
+        grid.minimum_width = static_cast<float>(columns) * 8 - 2;
+        for (std::size_t i = 0; i < grid.cells.size(); ++i) {
+            auto &cell = grid.cells[i];
+            cell.column = static_cast<int>(i) % columns;
+            cell.columns = columns;
+            const int row = static_cast<int>(i) / columns;
+            cell.core.label = {0, static_cast<float>(row) * (reference_side + 2), reference_side,
+                               reference_side};
+        }
+        return fitted;
+    }
+    return fitted;
+}
+FittedCpu fit_square_cpu(const std::vector<Processor> &processors, float length, float thickness) {
+    FittedCpu result{cpu_grid(processors, length, true)};
+    if (processors.empty()) {
+        return result;
+    }
+    const auto candidate = [&](float factor) {
+        return cpu_grid(processors, length / factor, true);
+    };
+    const auto fits = [&](const CpuGrid &grid, float factor) {
+        return grid.band * factor <= thickness && grid.preferred_width * factor <= length &&
+               grid.minimum_width * factor <= length;
+    };
+    float low = 1, high = std::max(1.0F, thickness / 22);
+    auto grid = candidate(high);
+    if (fits(grid, high)) {
+        return fill_uniform_grid({std::move(grid), high}, length, thickness);
+    }
+    // At larger scales the longitudinal budget shrinks, so grid bands can only increase.
+    // Bounded bisection fits complete rows; it never shrinks tiles below their readable size.
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        const float middle = (low + high) / 2;
+        grid = candidate(middle);
+        if (fits(grid, middle)) {
+            low = middle;
+            result = {std::move(grid), middle};
+        } else {
+            high = middle;
+        }
+    }
+    return fill_uniform_grid(std::move(result), length, thickness);
+}
+void place_cpu(Layout &layout, const CpuGrid &grid, float width, float factor, Edge edge,
+               float scale) {
+    layout.cores.reserve(grid.cells.size());
+    const auto origin = layout.blocks[0].graphic;
+    for (const auto &cell : grid.cells) {
+        auto core = cell.core;
+        float cw =
+            (width - 2 * static_cast<float>(cell.columns - 1)) / static_cast<float>(cell.columns);
+        if (grid.uniform) {
+            cw = std::min(cw, core.label.height);
+            const float row = core.label.y / (core.label.height + 2);
+            core.label.y = row * (cw + 2);
+            core.label.height = cw;
+        }
+        core.label.x = static_cast<float>(cell.column) * (cw + 2);
+        core.label.width = cw;
+        const auto b = core.label;
+        if (edge == Edge::right) {
+            core.label = {grid.band - b.y - b.height, b.x, b.height, b.width};
+        } else if (edge == Edge::left) {
+            core.label = {b.y, width - b.x - b.width, b.height, b.width};
+        }
+        scale_box(core.label, factor);
+        move(core.label, origin.x, origin.y);
+        scale_box(core.label, scale);
+        layout.cores.push_back(core);
+    }
+}
+Layout arrange_vertical(const LayoutPlan &plan, float width, float height, float scale,
+                        Alignment alignment, Edge edge, const std::vector<Processor> &processors,
+                        bool squares) {
+    Layout l;
+    l.content_scale = scale;
+    const float w = width / scale, h = height / scale;
+    if (w + 0.0001F < plan.minimum_width || h + 0.0001F < plan.minimum_height) {
+        return l;
+    }
+    const float cpu_budget = h - 22 - static_cast<float>(plan.count) * 21 -
+                             static_cast<float>(plan.count - 1) * (22 + 12);
+    auto fitted = squares ? fit_square_cpu(processors, cpu_budget, w - 18)
+                          : FittedCpu{plan.cpu, std::min((w - 18) / plan.cpu.band,
+                                                         cpu_budget / plan.cpu.preferred_width)};
+    const float cpu_width = fitted.grid.band * fitted.factor;
+    const float cpu_height = fitted.grid.preferred_width * fitted.factor;
+    const float device_height = (h - 22 - cpu_height - static_cast<float>(plan.count) * 21 -
+                                 static_cast<float>(plan.count - 1) * 12) /
+                                static_cast<float>(plan.count - 1);
+    float y = 11;
+    std::size_t disk_index{};
+    for (auto kind : plan.kinds) {
+        auto &b = l.blocks.emplace_back();
+        b.kind = kind;
+        b.disk = kind == 3 ? disk_index++ : 0;
+        const float gw = kind == 0 ? cpu_width : w - 18;
+        const float gh = kind == 0 ? cpu_height : device_height;
+        const float x = 9 + alignment_offset(w - 18 - gw, alignment);
+        // Transpose only meter geometry, keeping icons upright and below their group.
+        place_block(b, 0, 0, gh, gw);
+        for (auto &m : b.meters) {
+            if (m.width > 0 && m.height > 0) {
+                m = {x + m.y, y, m.height, gh};
+            }
+        }
+        b.graphic = {x, y, gw, gh};
+        b.icon = {x + (gw - 14) / 2, y + gh + 7, 14, 14};
+        b.bounds = {x, y, gw, gh + 21};
+        y += gh + 33;
+    }
+    place_cpu(l, fitted.grid, fitted.grid.preferred_width, fitted.factor, edge, scale);
+    for (auto &b : l.blocks) {
+        scale_box(b.bounds, scale);
+        scale_box(b.icon, scale);
+        scale_box(b.graphic, scale);
+        for (auto &m : b.meters) {
+            scale_box(m, scale);
+        }
+    }
+    l.fits = true;
+    return l;
+}
 Layout arrange(const LayoutPlan &plan, float width, float height, bool horizontal, float scale,
-               Alignment alignment) {
+               Alignment alignment, Edge edge, const std::vector<Processor> &processors,
+               bool squares) {
+    if (!horizontal) {
+        return arrange_vertical(plan, width, height, scale, alignment, edge, processors, squares);
+    }
     Layout l;
     l.content_scale = scale;
     const float w = width / scale, h = height / scale;
@@ -235,8 +413,13 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     const bool single_row = cols == count;
     const float graphics = w - 22 - static_cast<float>(cols - 1) * 12 -
                            (single_row ? 13.0F : 0.0F) - static_cast<float>(cols) * 21;
-    const float cpu_width =
-        std::min(plan.cpu.preferred_width, graphics - static_cast<float>(cols - 1) * 48);
+    const int rows = (count + cols - 1) / cols;
+    const float available_band =
+        (h - 18 - static_cast<float>(rows - 1) * 12) / static_cast<float>(rows);
+    const float cpu_budget = graphics - static_cast<float>(cols - 1) * 48;
+    auto fitted =
+        squares ? fit_square_cpu(processors, cpu_budget, available_band) : FittedCpu{plan.cpu};
+    const float cpu_width = std::min(fitted.grid.preferred_width * fitted.factor, cpu_budget);
     // All device meters share the remainder. With wrapped rows, also respect the
     // full device-only row; its free space follows the selected content alignment.
     const float shared_width =
@@ -244,14 +427,15 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     const float g =
         single_row ? shared_width : std::min(shared_width, graphics / static_cast<float>(cols));
     // Allow only floating-point rounding at an analytically calculated fit boundary.
-    if (cpu_width + 0.0001F < plan.cpu.minimum_width || g + 0.0001F < 48 ||
+    if (cpu_width + 0.0001F < fitted.grid.minimum_width * fitted.factor || g + 0.0001F < 48 ||
         h + 0.0001F < plan.minimum_height) {
         return l;
     }
-    const float band = plan.cpu.band;
+    const float band = fitted.grid.band * fitted.factor;
+    const float used_height =
+        static_cast<float>(rows) * band + static_cast<float>(rows - 1) * 12 + 18;
     l.blocks.resize(static_cast<std::size_t>(count));
-    const float top = horizontal ? (h - plan.minimum_height) / 2 + 9
-                                 : 9 + alignment_offset(h - plan.minimum_height, alignment);
+    const float top = (h - used_height) / 2 + 9;
     std::size_t disk_index{};
     for (int i = 0; i < count; ++i) {
         auto &b = l.blocks[static_cast<std::size_t>(i)];
@@ -268,23 +452,7 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
         place_block(b, x, top + static_cast<float>(row) * (band + 12), i == 0 ? cpu_width : g,
                     band);
     }
-    l.cores.reserve(plan.cpu.cells.size());
-    for (const auto &cell : plan.cpu.cells) {
-        auto core = cell.core;
-        float cw = (cpu_width - 2 * static_cast<float>(cell.columns - 1)) /
-                   static_cast<float>(cell.columns);
-        if (plan.cpu.uniform) {
-            cw = std::min(cw, core.label.height);
-            const float row = core.label.y / (core.label.height + 2);
-            core.label.y = row * (cw + 2);
-            core.label.height = cw;
-        }
-        core.label.x = static_cast<float>(cell.column) * (cw + 2);
-        core.label.width = cw;
-        move(core.label, l.blocks[0].graphic.x, l.blocks[0].graphic.y);
-        scale_box(core.label, scale);
-        l.cores.push_back(core);
-    }
+    place_cpu(l, fitted.grid, cpu_width / fitted.factor, fitted.factor, edge, scale);
     if (single_row) {
         l.divider = {l.blocks[0].bounds.x + cpu_width + 21 + 12, top + (band - 20) / 2, 1, 20};
     }
@@ -301,9 +469,12 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     return l;
 }
 } // namespace
-Layout make_layout(float width, float height, bool horizontal,
-                   const std::vector<Processor> &processors, float text_scale,
-                   const Settings &settings, std::size_t disk_count) {
+Layout make_layout(float width, float height, Edge edge, const std::vector<Processor> &processors,
+                   float text_scale, const Settings &settings, std::size_t disk_count) {
+    const bool horizontal = loadbar::horizontal(edge);
+    if (edge < Edge::left || edge > Edge::bottom) {
+        return {};
+    }
     if (!valid_inputs(width, height, processors, text_scale, disk_count)) {
         return {};
     }
@@ -313,8 +484,8 @@ Layout make_layout(float width, float height, bool horizontal,
     if (!compact) {
         return {};
     }
-    // Freeze both widget and CPU rows at the compact minimum. Enlarging contents must
-    // neither wrap them nor increase the Shell reservation required for readability.
+    // Freeze widget rows and the rectangle-mode CPU grid at the compact minimum.
+    // Explicit square mode may refit its grid within the existing readable reservation.
     const auto &plan = compact->plan;
     const double requested = static_cast<double>(text_scale) *
                              std::max(1.0, static_cast<double>(thickness) / compact->thickness);
@@ -328,21 +499,41 @@ Layout make_layout(float width, float height, bool horizontal,
     if (scale > chosen) {
         scale = std::nextafter(scale, 0.0F);
     }
-    auto result = arrange(plan, width, height, horizontal, scale, settings.alignment);
+    auto result = arrange(plan, width, height, horizontal, scale, settings.alignment, edge,
+                          processors, settings.cpu_squares);
     if (!result.fits) {
-        result = arrange(plan, width, height, horizontal, text_scale, settings.alignment);
+        result = arrange(plan, width, height, horizontal, text_scale, settings.alignment, edge,
+                         processors, settings.cpu_squares);
     }
     return result;
 }
-Layout make_snapshot_layout(float width, float height, bool horizontal, const Snapshot &snapshot,
+Layout make_snapshot_layout(float width, float height, Edge edge, const Snapshot &snapshot,
                             float text_scale, const Settings &settings) {
+    const bool horizontal = loadbar::horizontal(edge);
+    if (edge < Edge::left || edge > Edge::bottom) {
+        return {};
+    }
     if (snapshot.disks.size() > 1024) {
         return {};
     }
-    auto layout = make_layout(width, height, horizontal, snapshot.processors, text_scale, settings,
+    auto layout = make_layout(width, height, edge, snapshot.processors, text_scale, settings,
                               disk_widget_count(snapshot.disks, settings));
     std::size_t source{};
     for (auto &block : layout.blocks) {
+        if (block.kind == 2 && !gpu_memory_visible(snapshot)) {
+            block.types = {Gauge::gpu_3d, Gauge::gpu_decode, Gauge::count};
+            const auto b = block.graphic;
+            const float band = horizontal ? b.height : b.width;
+            const float gap = 2 * layout.content_scale;
+            const float small = (band - 2 * gap) / 3;
+            block.meters = horizontal
+                               ? std::array<Box, 3>{{{b.x, b.y, b.width, band - small - gap},
+                                                     {b.x, b.y + band - small, b.width, small},
+                                                     {}}}
+                               : std::array<Box, 3>{{{b.x, b.y, band - small - gap, b.height},
+                                                     {b.x + band - small, b.y, small, b.height},
+                                                     {}}};
+        }
         if (block.kind != 3) {
             continue;
         }
@@ -354,9 +545,13 @@ Layout make_snapshot_layout(float width, float height, bool horizontal, const Sn
     }
     return layout;
 }
-double minimum_thickness(float length, float maximum, bool horizontal,
+double minimum_thickness(float length, float maximum, Edge edge,
                          const std::vector<Processor> &processors, float scale,
                          const Settings &settings, std::size_t disk_count) {
+    const bool horizontal = loadbar::horizontal(edge);
+    if (edge < Edge::left || edge > Edge::bottom) {
+        return maximum + 1;
+    }
     if (!std::isfinite(maximum) || maximum < 1 || maximum > 10000) {
         return maximum + 1;
     }

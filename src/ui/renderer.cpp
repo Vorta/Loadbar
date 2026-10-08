@@ -1,4 +1,5 @@
 #include "ui/renderer.hpp"
+#include "model/geometry.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -23,6 +24,31 @@ void checked(HRESULT result) {
         throw GraphicsFailure{result};
     }
 }
+// Restores the transform and clip even when text creation throws during hover rendering.
+class OverlayTransform {
+  public:
+    OverlayTransform(ID2D1RenderTarget *target, Box bounds, Edge edge) : target_(target) {
+        target_->GetTransform(&previous_);
+        target_->PushAxisAlignedClip(rectangle(bounds), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        if (edge == Edge::right) {
+            target_->SetTransform(D2D1::Matrix3x2F(0, 1, -1, 0, bounds.x + bounds.width, bounds.y) *
+                                  previous_);
+        } else if (edge == Edge::left) {
+            target_->SetTransform(
+                D2D1::Matrix3x2F(0, -1, 1, 0, bounds.x, bounds.y + bounds.height) * previous_);
+        }
+    }
+    ~OverlayTransform() {
+        target_->SetTransform(previous_);
+        target_->PopAxisAlignedClip();
+    }
+    OverlayTransform(const OverlayTransform &) = delete;
+    OverlayTransform &operator=(const OverlayTransform &) = delete;
+
+  private:
+    ID2D1RenderTarget *target_;
+    D2D1_MATRIX_3X2_F previous_{};
+};
 using Geometry = Microsoft::WRL::ComPtr<ID2D1Geometry>;
 Geometry icon_geometry(ID2D1Factory *factory, unsigned icon) {
     std::vector<Geometry> parts;
@@ -120,6 +146,8 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
                    a.efficiency_class == b.efficiency_class;
         });
     if (!target_ || !layout_.fits || topology_changed || disk_layout_changed(next, settings) ||
+        layout_cpu_squares_ != settings.cpu_squares ||
+        layout_gpu_memory_ != gpu_memory_visible(next) ||
         layout_gpu_visible_ != settings.gpu_visible ||
         layout_network_visible_ != settings.network_visible ||
         !std::ranges::equal(previous.disks, next.disks,
@@ -300,8 +328,14 @@ void Renderer::meter(Box b, Status status, double fraction, Color hue, Color tra
         return;
     }
     Box fill = b;
-    fill.width =
-        std::min(b.width, std::max(content_scale_, b.width * static_cast<float>(fraction)));
+    if (horizontal(layout_edge_)) {
+        fill.width =
+            std::min(b.width, std::max(content_scale_, b.width * static_cast<float>(fraction)));
+    } else {
+        fill.height =
+            std::min(b.height, std::max(content_scale_, b.height * static_cast<float>(fraction)));
+        fill.y = b.y + b.height - fill.height;
+    }
     drawing_->PushAxisAlignedClip(rectangle(fill), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     brush_->SetColor(native(high_contrast_ ? system_color(COLOR_HIGHLIGHT) : hue));
     drawing_->FillRoundedRectangle(rounded, brush_.Get());
@@ -461,7 +495,11 @@ IDWriteTextLayout *Renderer::text_layout(const std::wstring &text, float width, 
 }
 void Renderer::overlay(std::size_t block, const Snapshot &s, const Settings &settings,
                        Clock::time_point now) {
-    const auto b = layout_.blocks[block].graphic;
+    auto b = layout_.blocks[block].graphic;
+    const OverlayTransform transform(drawing_.Get(), b, layout_edge_);
+    if (!horizontal(layout_edge_)) {
+        b = {0, 0, b.height, b.width};
+    }
     const auto draw = [&](IDWriteTextLayout *text, float x, float y, Color color) {
         brush_->SetColor(native(high_contrast_ ? foreground_ : color));
         drawing_->DrawTextLayout({x, y}, text, brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -567,8 +605,9 @@ void Renderer::overlay(std::size_t block, const Snapshot &s, const Settings &set
     }
 }
 HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
-                            const Settings &settings, bool horizontal, bool fallback, float scale,
+                            const Settings &settings, Edge edge, bool fallback, float scale,
                             bool hover, bool high_contrast, Clock::time_point now) {
+    const bool horizontal = loadbar::horizontal(edge);
     bool begun = false;
     const auto failed_draw = [&](HRESULT code) {
         if (begun) {
@@ -587,12 +626,14 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             });
         if (disk_layout_changed(snapshot, settings) || topology_changed ||
             size.width != layout_width_ || size.height != layout_height_ ||
-            scale != layout_scale_ || current_dpi != layout_dpi_ ||
-            horizontal != layout_horizontal_ || settings.alignment != layout_alignment_ ||
+            scale != layout_scale_ || current_dpi != layout_dpi_ || edge != layout_edge_ ||
+            settings.alignment != layout_alignment_ ||
+            settings.cpu_squares != layout_cpu_squares_ ||
+            gpu_memory_visible(snapshot) != layout_gpu_memory_ ||
             settings.gpu_visible != layout_gpu_visible_ ||
             settings.network_visible != layout_network_visible_) {
-            layout_ = make_snapshot_layout(size.width, size.height, horizontal, snapshot, scale,
-                                           settings);
+            layout_ =
+                make_snapshot_layout(size.width, size.height, edge, snapshot, scale, settings);
             layout_disks_.clear();
             layout_disks_.reserve(snapshot.disks.size());
             for (const auto &disk : snapshot.disks) {
@@ -608,9 +649,11 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             layout_width_ = size.width;
             layout_height_ = size.height;
             layout_scale_ = scale;
-            layout_horizontal_ = horizontal;
+            layout_edge_ = edge;
             layout_alignment_ = settings.alignment;
             layout_gpu_visible_ = settings.gpu_visible;
+            layout_cpu_squares_ = settings.cpu_squares;
+            layout_gpu_memory_ = gpu_memory_visible(snapshot);
             layout_network_visible_ = settings.network_visible;
             glows_.clear();
             text_cache_.clear();
@@ -725,7 +768,7 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                     color.a = 0.4F;
                 }
                 draw_icon(block.kind, block.icon, color);
-                if (hover) {
+                if (hover && settings.show_hover_info) {
                     overlay(index, snapshot, settings, now);
                 }
             }
@@ -765,8 +808,8 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
         return failed_draw(E_FAIL);
     }
 }
-HRESULT Renderer::paint(HWND window, const Snapshot &snapshot, const Settings &settings,
-                        bool horizontal, bool fallback, float scale, bool hover) {
+HRESULT Renderer::paint(HWND window, const Snapshot &snapshot, const Settings &settings, Edge edge,
+                        bool fallback, float scale, bool hover) {
     if (!factory_) {
         const auto hr =
             D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory_.GetAddressOf());
@@ -806,7 +849,7 @@ HRESULT Renderer::paint(HWND window, const Snapshot &snapshot, const Settings &s
     }
     // Keep a local reference: failure recovery may release the member while finishing a draw.
     const auto target = target_;
-    return render_to(target.Get(), snapshot, settings, horizontal, fallback, scale, hover,
+    return render_to(target.Get(), snapshot, settings, edge, fallback, scale, hover,
                      system_high_contrast_.value_or(false), Clock::now());
 }
 std::size_t Renderer::tooltip_target(float x, float y) const noexcept {
@@ -827,6 +870,8 @@ std::size_t Renderer::tooltip_target(float x, float y) const noexcept {
 }
 std::wstring Renderer::tooltip(float x, float y, const Snapshot &snapshot,
                                const Settings &settings) const {
-    return metric_tooltip(layout_, x, y, snapshot, settings, Clock::now());
+    return settings.show_hover_info
+               ? metric_tooltip(layout_, x, y, snapshot, settings, Clock::now())
+               : L"";
 }
 } // namespace loadbar

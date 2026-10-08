@@ -128,8 +128,8 @@ int wmain(int argc, wchar_t **argv) {
             loadbar::Settings settings;
             settings.edge = loadbar::Edge::top;
             settings.thickness = height;
-            checked(renderer.render_to(target.Get(), snapshot, settings, true, false, 1, false,
-                                       false, snapshot.timestamp));
+            checked(renderer.render_to(target.Get(), snapshot, settings, loadbar::Edge::top, false,
+                                       1, false, false, snapshot.timestamp));
             save(wic.Get(), bitmap.Get(), directory / std::format(L"frame-{:02}.png", tick));
         }
         std::cout << "24 synthetic documentation frames; production renderer, no HWND/providers\n";

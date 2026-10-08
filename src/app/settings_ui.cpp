@@ -96,6 +96,12 @@ void Application::create_settings() {
                 SendMessageW(edit, EM_SETLIMITTEXT, 64, 0);
             }
         }
+        child(settings_content_, instance_, L"BUTTON", L"Display CPU usage always as s&quares",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kCpuSquares);
+        child(settings_content_, instance_, L"BUTTON", L"Show info on &hover",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kHoverInfo);
+        child(settings_content_, instance_, L"BUTTON", L"Open &Task Manager on click",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kTaskManagerClick);
         const auto status =
             child(settings_window_, instance_, L"STATIC", L"", SS_NOPREFIX, kFooterStatus);
         ShowWindow(status, SW_HIDE);
@@ -161,6 +167,12 @@ void Application::populate_settings() {
         SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
     }
     SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(settings_.alignment), 0);
+    CheckDlgButton(settings_content_, kCpuSquares,
+                   settings_.cpu_squares ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(settings_content_, kHoverInfo,
+                   settings_.show_hover_info ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(settings_content_, kTaskManagerClick,
+                   settings_.open_task_manager_on_click ? BST_CHECKED : BST_UNCHECKED);
     populating_settings_ = false;
     update_settings_actions();
 }
@@ -476,6 +488,10 @@ void Application::layout_settings() {
         }
         position(field(settings_content_, static_cast<int>(i)), bounds);
     }
+    constexpr std::array preference_ids{kCpuSquares, kHoverInfo, kTaskManagerClick};
+    for (std::size_t i = 0; i < preference_ids.size(); ++i) {
+        position(GetDlgItem(settings_content_, preference_ids[i]), layout.preferences[i]);
+    }
     position(GetDlgItem(settings_content_, kDrivesLabel), layout.drives_label);
     position(drives, layout.drives);
     RECT drive_client{};
@@ -541,6 +557,10 @@ SettingsDraft Application::settings_draft() const {
         }
     }
     draft.hidden_disks = draft_hidden_disks_;
+    draft.cpu_squares = IsDlgButtonChecked(settings_content_, kCpuSquares) == BST_CHECKED;
+    draft.show_hover_info = IsDlgButtonChecked(settings_content_, kHoverInfo) == BST_CHECKED;
+    draft.open_task_manager_on_click =
+        IsDlgButtonChecked(settings_content_, kTaskManagerClick) == BST_CHECKED;
     draft.edge = selection(field(settings_content_, 3));
     draft.alignment = selection(field(settings_content_, 6));
     draft.thickness = edit_text(field(settings_content_, 4));
@@ -625,6 +645,14 @@ bool Application::commit_settings(Settings settings) {
         MessageBoxW(settings_window_ ? settings_window_ : window_,
                     error_text(saved.error()).c_str(),
                     L"Loadbar — active settings could not be saved", MB_OK | MB_ICONWARNING);
+    }
+    if (previous.show_hover_info != settings_.show_hover_info) {
+        if (tooltip_) {
+            SendMessageW(tooltip_, TTM_POP, 0, 0);
+            SendMessageW(tooltip_, TTM_ACTIVATE, settings_.show_hover_info, 0);
+        }
+        tooltip_cache_ = {};
+        schedule_refresh();
     }
     if (collection_changed(previous, settings_)) {
         reconfigure_worker(previous.interval_ms != settings_.interval_ms);

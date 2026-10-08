@@ -21,8 +21,8 @@ std::optional<Rect> place_readable_bar(AppBar &bar, const Monitor &monitor,
     const auto maximum = static_cast<float>(along_x ? monitor.bounds.bottom - monitor.bounds.top
                                                     : monitor.bounds.right - monitor.bounds.left) /
                          dpi_scale * 0.25F;
-    auto minimum = minimum_thickness(length(monitor.bounds), maximum, along_x, processors,
-                                     text_scale, settings, disk_count);
+    auto minimum = minimum_thickness(length(monitor.bounds), maximum, edge, processors, text_scale,
+                                     settings, disk_count);
     int previous_pixels{};
     // The Shell can shorten the edge at either QUERYPOS or SETPOS, including during a
     // retry. Raise only the temporary readable minimum; never rewrite the user's request.
@@ -36,9 +36,9 @@ std::optional<Rect> place_readable_bar(AppBar &bar, const Monitor &monitor,
             monitor.bounds, edge, proposed_pixels, [&](Rect queried) -> std::optional<int> {
                 // Recompute before SETPOS as well, so an unchanged shortened edge does not
                 // repeatedly shrink and grow its reservation on ABN_POSCHANGED.
-                minimum = std::max(minimum,
-                                   minimum_thickness(length(queried), maximum, along_x, processors,
-                                                     text_scale, settings, disk_count));
+                minimum =
+                    std::max(minimum, minimum_thickness(length(queried), maximum, edge, processors,
+                                                        text_scale, settings, disk_count));
                 const auto adjusted =
                     resolve_thickness(settings, monitor.bounds, monitor.dpi, minimum);
                 if (!adjusted) {
@@ -51,15 +51,14 @@ std::optional<Rect> place_readable_bar(AppBar &bar, const Monitor &monitor,
             return std::nullopt;
         }
         if (make_layout(static_cast<float>(rectangle->right - rectangle->left) / dpi_scale,
-                        static_cast<float>(rectangle->bottom - rectangle->top) / dpi_scale, along_x,
+                        static_cast<float>(rectangle->bottom - rectangle->top) / dpi_scale, edge,
                         processors, text_scale, settings, disk_count)
                 .fits) {
             return rectangle;
         }
         previous_pixels = proposed_pixels;
-        minimum =
-            std::max(minimum, minimum_thickness(length(*rectangle), maximum, along_x, processors,
-                                                text_scale, settings, disk_count));
+        minimum = std::max(minimum, minimum_thickness(length(*rectangle), maximum, edge, processors,
+                                                      text_scale, settings, disk_count));
     }
     return std::nullopt;
 }

@@ -105,3 +105,14 @@ The subsequent CPU content-width correction changes allocation geometry, not sam
 paint scheduling. The synthetic timings above predate that correction and are not a
 measurement of the final layout. Final process/GPU overhead still requires the controlled
 performance gate.
+
+The unreleased GPU-fallback/vertical-layout update adds no worker or timer. Shared GPU memory
+is queried only when the dedicated observation is not valid. Disabling hover skips overlay
+text, tooltip updates and hover-only retention-age wakeups. Presentation toggles do not
+restart providers. These are implementation properties, not measured overhead improvements;
+the new layouts still need the controlled performance and soak checks above.
+
+Edge-aware square fitting performs a bounded search only when layout inputs change. Edge
+switches invalidate the existing layout key; unchanged frames reuse it. Rotated hover text
+uses drawing transforms and the existing text cache, without new timers or worker work.
+These changes have not been measured in a production performance run.

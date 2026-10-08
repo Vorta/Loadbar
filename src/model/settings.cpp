@@ -55,9 +55,9 @@ bool valid_settings(const Settings &settings) {
 std::wstring encode_settings(const Settings &settings) {
     std::wostringstream stream;
     stream.imbue(std::locale::classic());
-    // v9 persists only explicit disk exclusions; unknown identities remain visible.
-    stream << L"Loadbar 9 " << static_cast<unsigned>(settings.edge) << L' ' << std::setprecision(17)
-           << settings.thickness << L' ' << settings.interval_ms << L' '
+    // v10 adds presentation/interaction choices; earlier records retain their defaults.
+    stream << L"Loadbar 10 " << static_cast<unsigned>(settings.edge) << L' '
+           << std::setprecision(17) << settings.thickness << L' ' << settings.interval_ms << L' '
            << std::quoted(settings.monitor_id) << L' ' << std::quoted(settings.gpu_id) << L' '
            << std::quoted(settings.network_id) << L' ' << static_cast<unsigned>(settings.alignment)
            << L' ' << settings.gpu_visible << L' ' << settings.network_visible << L' '
@@ -66,6 +66,8 @@ std::wstring encode_settings(const Settings &settings) {
     for (const auto &id : settings.hidden_disks) {
         stream << L' ' << std::quoted(id);
     }
+    stream << L' ' << settings.cpu_squares << L' ' << settings.show_hover_info << L' '
+           << settings.open_task_manager_on_click;
     return stream.str();
 }
 std::optional<Settings> decode_settings(std::wstring_view text) {
@@ -78,7 +80,7 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
     std::wstring name;
     unsigned version{}, edge{}, mode{}, scale{};
     stream >> name >> version >> edge;
-    if (!stream || name != L"Loadbar" || version < 1 || version > 9 || edge > 4) {
+    if (!stream || name != L"Loadbar" || version < 1 || version > 10 || edge > 4) {
         return std::nullopt;
     }
     if (version < 3) {
@@ -148,6 +150,16 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
                 return std::nullopt;
             }
         }
+    }
+    if (version >= 10) {
+        unsigned squares{}, hover{}, click{};
+        stream >> squares >> hover >> click;
+        if (!stream || squares > 1 || hover > 1 || click > 1) {
+            return std::nullopt;
+        }
+        result.cpu_squares = squares != 0;
+        result.show_hover_info = hover != 0;
+        result.open_task_manager_on_click = click != 0;
     }
     // Validate old records before retiring ceilings/log mode. No old peak is inferred.
     if (version < 4 && !std::ranges::all_of(

@@ -315,7 +315,7 @@ void layout_and_selection() {
     using namespace loadbar;
     Snapshot unmapped;
     unmapped.processors.push_back({{2, 7}, 100135, false, {}});
-    const auto unmapped_layout = make_layout(1200, 200, true, unmapped.processors, 1);
+    const auto unmapped_layout = make_layout(1200, 200, loadbar::Edge::top, unmapped.processors, 1);
     check(unmapped_layout.fits && core_label(unmapped_layout.cores[0]) == L"G2:7",
           "Unmapped lane label uses actual group and logical processor identity");
     const auto &unmapped_lane = unmapped_layout.cores[0].label;
@@ -329,10 +329,10 @@ void layout_and_selection() {
         portrait.processors.push_back(
             {{0, index}, index / 2, true, {50, Status::valid, Unit::percent, {}, {}, {}}});
     }
-    const auto thickness = minimum_thickness(540, 240, true, portrait.processors, 1);
+    const auto thickness = minimum_thickness(540, 240, loadbar::Edge::top, portrait.processors, 1);
     check(thickness <= 240, "200% portrait horizontal bar fits within safety maximum");
     const auto compact =
-        make_layout(540, static_cast<float>(thickness), true, portrait.processors, 1);
+        make_layout(540, static_cast<float>(thickness), loadbar::Edge::top, portrait.processors, 1);
     check(compact.fits && compact.cores.size() == 24, "Compact horizontal grid retains every LP");
     const auto &first_lane = compact.cores[0].label;
     const auto &second_lane = compact.cores[1].label;
@@ -374,9 +374,9 @@ void layout_and_selection() {
     }
     for (bool horizontal : {false, true}) {
         for (float scale : {1.0F, 1.25F, 1.5F, 2.0F, 2.25F}) {
-            const auto layout =
-                make_layout(horizontal ? 3840.0F : 800.0F, horizontal ? 800.0F : 3840.0F,
-                            horizontal, processors, scale);
+            const auto layout = make_layout(
+                horizontal ? 3840.0F : 800.0F, horizontal ? 800.0F : 3840.0F,
+                (horizontal ? loadbar::Edge::top : loadbar::Edge::right), processors, scale);
             check(layout.fits && layout.cores.size() == processors.size(),
                   "All processors visible at text scale");
             std::set<std::size_t> indices;
@@ -387,7 +387,8 @@ void layout_and_selection() {
             check(indices.size() == processors.size(), "No hidden/duplicated logical processors");
         }
     }
-    check(!make_layout(40, 40, true, processors, 1).fits, "Too-small layout is rejected");
+    check(!make_layout(40, 40, loadbar::Edge::top, processors, 1).fits,
+          "Too-small layout is rejected");
     Device a;
     a.id = L"a";
     a.preferred = true;

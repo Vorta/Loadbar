@@ -40,15 +40,16 @@ void snap_layout(Layout &layout, float dpi);
 [[nodiscard]] std::wstring metric_tooltip(const Layout &layout, float x, float y,
                                           const Snapshot &snapshot, const Settings &settings,
                                           Clock::time_point now);
+// Geometry requires an actual edge, already resolved against the active monitor.
 // Filters explicit exclusions and maps disk blocks back to their snapshot indices.
-[[nodiscard]] Layout make_snapshot_layout(float width, float height, bool horizontal,
+[[nodiscard]] Layout make_snapshot_layout(float width, float height, Edge edge,
                                           const Snapshot &snapshot, float text_scale,
                                           const Settings &settings);
 // Count-based geometry uses the number of displayed disk widgets; zero means none.
-[[nodiscard]] Layout make_layout(float width, float height, bool horizontal,
+[[nodiscard]] Layout make_layout(float width, float height, Edge edge,
                                  const std::vector<Processor> &processors, float text_scale,
                                  const Settings &settings = {}, std::size_t disk_count = 1);
-[[nodiscard]] double minimum_thickness(float length, float maximum, bool horizontal,
+[[nodiscard]] double minimum_thickness(float length, float maximum, Edge edge,
                                        const std::vector<Processor> &processors, float text_scale,
                                        const Settings &settings = {}, std::size_t disk_count = 1);
 } // namespace loadbar

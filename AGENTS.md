@@ -83,6 +83,8 @@ Centralize these defaults; do not promote them into additional user requirements
 | Rate units | B/s, KiB/s, MiB/s, GiB/s; adapt units without confusing bytes/bits or binary/decimal scaling. |
 | Controls | Notification-area menu for selection, placement, settings, and exit; no autohide by default. |
 | Startup | No launch-at-sign-in registration unless explicitly requested. |
+| Interaction | Show info on hover and Open Task Manager on click are checked by default; disabling hover removes overlays and the bar tooltip, retaining Settings readings and the tray tooltip. |
+| CPU shape | Display CPU usage always as squares is unchecked by default; checked mode retains P/E class sizes with 14/6-DIP square sides. |
 
 Never sum physical disks or silently select only one for display. Remember explicitly hidden disks
 by stable identity; new identities are shown automatically. Prefer a non-software GPU with the largest reported
@@ -273,9 +275,11 @@ DXGI. Do not combine unrelated nodes or dedicated/shared segments.
 
 Never use `IDXGIAdapter3::QueryVideoMemoryInfo`'s `CurrentUsage` or process budget as
 adapter-wide usage/capacity. Do not sum process memory figures with shared allocations.
-On unified/integrated hardware, label dedicated/shared memory separately; use only a
-verified adapter-wide numerator and meaningful matching limit. Otherwise report the
-unsupported meter unavailable, not invented VRAM or substituted system RAM. [Process scope][gpu-process] [GPU semantics][gpu]
+On all hardware, prefer a fresh dedicated observation, then a fresh shared observation with a
+verified adapter-wide numerator and matching shared limit. Label the selected scope explicitly;
+never substitute total system RAM. If neither source is valid, retain the last displayed memory
+observation with its original scope, capacity and age. Omit the memory meter only until that
+adapter has provided its first valid memory observation; use a 14/6-DIP 3D/decode split then. [Process scope][gpu-process] [GPU semantics][gpu]
 
 ### Network
 
@@ -294,12 +298,15 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
   row width equally among visible non-CPU device graphics. Hybrid tiles retain proportional
   class widths. Uniform or unknown efficiency classes use equally sized squares side by side,
   wrapping only when needed at a 6-DIP minimum with 2-DIP reference gaps. Fit squares within the
-  existing CPU band without reserving unused width after the grid.
+  available CPU band without reserving unused width after the grid. Explicit square mode fills
+  usable strip thickness where the readable device allocation permits, resizes the CPU area
+  along the edge, and divides the remaining space among non-CPU widgets.
   Keep RAM, both GPU engines, GPU memory, disk directions, and network
   directions identifiable. Use labels/direction cues as well as color.
 - Increasing effective bar thickness scales graphics, icons, hover text and internal spacing
-  together, within the available space. Preserve widget and CPU rows from the compact readable
-  baseline and cap enlargement when they no longer fit; reflow for changes to edge length,
+  together, within the available space. Preserve widget rows and rectangle-mode CPU rows from
+  the compact readable baseline; explicit square fitting may rearrange CPU rows. Cap enlargement
+  when it no longer fits; reflow for changes to edge length,
   orientation, topology, devices or Windows text scale. Keep equal non-CPU graphic widths and separate
   automatic magnification from DPI/text scaling. Native controls retain Windows sizing.
 - Numbers appear on hover only. GPU uses Device violet; network keeps the 2:1 (14/6-DIP
@@ -319,6 +326,11 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
   leave no widget; keep their last-valid values and session peaks without updating them. Shared
   disk queries continue while any disk is visible and close when all are hidden; reopening
   primes them. Keep discovery active and retain exclusions through reconnect and restart.
+- Vertical bars stack CPU and device widgets, put upright icons below their graphics, and fill
+  side-by-side device meters from bottom to top. Rotate the CPU grid clockwise on Right (E left
+  of P) and counterclockwise on Left (E right of P); size its area to the fitted grid. Rotate
+  inline hover text top-down on Right and bottom-up on Left; native tooltips stay upright.
+  Visible non-CPU graphics divide the remaining height equally.
 - Reflow the same visible metrics for horizontal/vertical bars. Enforce a documented compact
   layout/minimum readable size rather than silently hiding processors. Provide exact
   values and statuses in accessible text/tooltips when inline numbers do not fit.

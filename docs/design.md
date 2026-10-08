@@ -3,7 +3,8 @@
 Loadbar uses a graphics-first layout with an opaque background, outlined device icons,
 rounded meter tracks and static high-use glows. Installed Consolas is preferred, with
 Cascadia Mono as fallback. Numbers appear only on hover; native tooltips and Settings
-provide complete readings when inline text cannot fit.
+provide complete readings when inline text cannot fit. **Show info on hover** disables both
+the overlays and the bar tooltip; it leaves Settings readings and the tray tooltip available.
 
 ## Layout and scaling
 
@@ -18,6 +19,11 @@ row whenever they fit at the 6-DIP readable minimum, otherwise wrap with 2-DIP r
 Their side length fits the existing CPU band. The CPU widget ends at the grid, so a small
 CPU does not leave a large empty allocation before RAM. At reference scale, hybrid P/E
 tiles prefer 22/10-DIP widths, compressing toward 14/6 DIPs on constrained edges.
+**Display CPU usage always as squares** uses 14/6-DIP P/E sides while keeping class grouping
+and logical-processor siblings. It defaults off; uniform CPUs remain square in either mode.
+Checked mode grows the square grid to use the strip thickness, bounded by the space needed
+for readable device widgets. The CPU allocation follows the fitted grid along the edge;
+remaining device graphics share the space equally.
 
 Drives checkboxes appear below Network and above Edge in Settings. Unchecking a drive hides
 its widget on Apply; new disks are checked automatically, and Cancel restores committed choices.
@@ -28,8 +34,15 @@ remaining device widgets share the freed width while CPU keeps its grid-sized al
 The compact layout determines widget and CPU rows from edge length, topology, device count
 and Windows text scale. Greater bar thickness magnifies graphics, icons, hover fonts and
 spacing together, capped by the space available to those rows. Further horizontal thickness
-adds padding; vertical thickness can still widen graphics after icon/row scaling reaches its
-cap. Edge/topology changes reflow; resize history does not affect the result.
+adds padding in rectangle mode; explicit square mode can use that space for the CPU grid.
+Vertical bars stack CPU, RAM, GPU, drives and network; each upright icon is
+centered below its graphic. Meters sit side by side and fill bottom to top, with the usual
+10/4/4 or 14/6 proportions across their widths. The CPU grid rotates clockwise on Right
+(E tiles left of P) and counterclockwise on Left (E tiles right of P), preserving each
+logical processor and sibling ordering. Its fitted dimensions determine the CPU allocation;
+non-CPU graphics divide the remaining height equally. The vertical compact device graphic is
+at least 22 × 22 DIPs, with 7-DIP icon separation and 12-DIP widget separation. Edge/topology
+changes reflow; resize history does not affect the result.
 
 The readable minimum may raise the requested thickness. Placement never silently hides cores
 or disks. DPI converts between physical pixels and DIPs; Windows text scaling is separate
@@ -42,7 +55,7 @@ behavior are described in [architecture.md](architecture.md).
 | --- | --- |
 | CPU | Each tile uses its own logical processor's displayed utilization; physical-core relationships remain in details |
 | RAM | Fixed percentage scale; hover shows coherent used/total binary GB and percentage |
-| GPU | Device violet; visual order is 3D, memory, decode, with 10/4/4-DIP reference heights |
+| GPU | Device violet; 3D, selected memory, decode in 10/4/4 proportions; 3D/decode in 14/6 when memory has never been observed |
 | Disk | Active/read/write in 10/4/4 proportions; hues `#65C55B`, `#B9DF9B`, `#36884D` |
 | Network | Fixed 14/6-DIP download/upload split |
 | Rates | Independent linear session-peak scales by device and direction |
@@ -53,7 +66,9 @@ its own tile. [metrics.md](metrics.md) defines the status and scope rules.
 
 Hover overlays appear immediately; the native tooltip delay is 800 ms. Text keeps a 9-DIP
 minimum. RAM uses one line where possible, then two lines; an ellipsis indicates omitted
-inline detail without discarding the complete tooltip/Settings value.
+inline detail without discarding the complete tooltip/Settings value. On Right, inline text
+reads top-down; on Left, bottom-up. Its backing panel rotates with the text and clips to the
+widget. Icons, native popup tooltips and Settings text stay upright.
 
 In high contrast, CPU interiors interpolate from `COLOR_WINDOW` at idle to
 `COLOR_WINDOWTEXT` at full use, with a foreground outline keeping idle cores visible.
@@ -63,7 +78,8 @@ See [Microsoft's high-contrast guidance](https://learn.microsoft.com/en-us/windo
 
 ## Interaction and verification
 
-Left-click opens Task Manager using its fixed system path. Right-click opens the menu;
+Left-click opens Task Manager using its fixed system path when **Open Task Manager on click**
+is checked (the default). Unchecking it leaves left-click inactive. Right-click opens the menu;
 the notification icon and native Settings provide keyboard access and Exit.
 
 The rendering suite exercises the production renderer on WIC bitmaps without an AppBar.

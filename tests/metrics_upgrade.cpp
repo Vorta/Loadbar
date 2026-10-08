@@ -41,7 +41,7 @@ void memory_tests() {
     require(ram_changed(snapshot, changed, {}, 1000),
             "Capacity change repaints even at equal percent");
     require(!ram_changed(snapshot, snapshot, {}, 1000), "Identical RAM does not repaint");
-    const auto layout = make_layout(1920, 40, true, {}, 1);
+    const auto layout = make_layout(1920, 40, loadbar::Edge::top, {}, 1);
     const auto box = layout.blocks[1].bounds;
     const auto tip = metric_tooltip(layout, box.x + 1, box.y + 1, snapshot, {}, {});
     require(tip.find(L"47.0/63.4GB 74%") != std::wstring::npos &&
@@ -248,9 +248,9 @@ void migration_tests() {
                     migrated->alignment == Alignment::end && migrated->gpu_id == L"gpu" &&
                     migrated->network_id == L"nic",
                 "Legacy scale retirement retains placement/devices/appearance");
-        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 9 ") &&
+        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 10 ") &&
                     decode_settings(encode_settings(*migrated)) == migrated,
-                "Migrated choices round trip in v9 without persisted peaks");
+                "Migrated choices round trip in v10 without persisted peaks");
     }
     for (const auto *malformed :
          {L"Loadbar 4 0 40 1000 \"\" \"\" \"\" 0 2 0 0",

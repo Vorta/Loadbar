@@ -67,3 +67,40 @@ thickness magnification, alignment, DPI snapping and renderer hit/invalidation g
 Both ran the Debug model executable successfully. Final documentation and RAM-ellipsis
 fixture adjustments were rechecked independently; all truncation assertions remain intact.
 Live AppBar appearance and production performance were not exercised.
+
+## Unreleased GPU fallback and presentation preferences
+
+After correcting a Markdown table delimiter and the future-schema test label, two fresh,
+independent adversarial reviews completed consecutively with no actionable findings. They
+covered dedicated/shared/retained memory scope and age, adapter changes, two-engine layout,
+P/E square sizing, complete thread coverage, vertical allocation/fill/icon placement, cache
+invalidation, native draft/Cancel and interaction gates, schema-10 migration, regression tests
+and documentation. Both inspected generated production-renderer previews and ran diff checks.
+The earlier acceptance reviewer also ran the Release model and hidden-settings test binaries.
+
+These reviews did not launch an AppBar or Task Manager, compare hardware counters, measure
+production resource usage, or test standalone packaging. Automated verification is recorded
+in [testing.md](testing.md); manual gates remain pending.
+
+## Unreleased edge-aware CPU and hover layout
+
+The first review was clean. The second found a reproducible uniform/unknown CPU square-fit
+gap: 128 threads could occupy only part of the declared cross-strip band. A regression
+failed before the fix; complete occupied-row fitting corrected it. Both reviewers then
+independently reviewed the final implementation, consecutively reporting no actionable
+findings. Both confirmed the final explicit integer-row calculation required by clang-tidy.
+
+Their scope included resolved-edge propagation, CPU identities/readability, square fitting,
+P/E sides, remaining device allocations, cache invalidation, hover rotation/clipping and
+resource-failure recovery. Each ran a model test executable; neither launched the AppBar,
+measured production overhead, or validated hardware/standalone behavior. Full automated
+verification and the pending interactive procedure are in [testing.md](testing.md).
+
+## 1.1.3 publication review
+
+At the owner's request, a fresh subagent independently reviewed the complete feature diff
+before publication, including GPU memory fallback/continuity, schema-10 settings,
+interaction gates, CPU fitting and vertical rendering. It reported no actionable findings
+and independently ran the Release model test executable successfully. No code changes were
+needed from this review. The owner also reported that the application looks and works
+correctly during their manual use; no detailed hardware or test-matrix coverage was claimed.

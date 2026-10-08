@@ -48,9 +48,20 @@ removes the reservation and leaves Settings/Exit available.
 A session-local mutex with a user-only ACL enforces one instance per user/session. A second
 launch reports the existing instance before creating an AppBar; there is no IPC payload.
 
+The resolved edge travels from placement to layout and rendering; automatic is resolved before
+geometry is requested. The edge is part of the layout-cache key, so equal-size Left/Right
+switches refresh CPU placement and hover direction. Square fitting runs only on layout changes,
+with at most 20 scale-fitting steps. Uniform square grids then check complete row arrangements
+within the readable tile bound to fill occupied strip thickness. Hover rotation saves/restores
+drawing transforms and clipping, including failed text-resource creation.
+
 ## Settings
 
-A versioned registry value stores committed settings. Schema 9 adds a set of explicitly hidden physical-disk identities to the independent
+A versioned registry value stores committed settings. Schema 10 adds the CPU-square, hover-info
+and Task Manager click flags, defaulting to false/true/true for schemas 1–9. They affect only
+UI behavior and do not restart collectors. Bar tooltips are popped and deactivated with
+[TTM_ACTIVATE](https://learn.microsoft.com/en-us/windows/win32/controls/ttm-activate) when hover info
+is disabled. Schema 9 added a set of explicitly hidden physical-disk identities to the independent
 GPU/network visibility flags and whole-number thickness;
 older schemas validate against their original bounds before migrating percentage/fractional
 sizes and retired appearance/rate controls. Conversion uses the resolved monitor and DPI.

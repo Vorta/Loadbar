@@ -73,6 +73,7 @@ loadbar::Snapshot fixture() {
     s.gauges[5].session_peak = s.gauges[5].value * 4;
     s.gpu_memory_bytes = {12.0 * 1073741824, Status::valid, Unit::bytes, {}, {}, {}};
     s.gpu_memory_capacity = 24ULL * 1073741824;
+    s.gauges[3].value = 50;
     s.gpu_label = L"Test GPU (fixture only)";
     s.disks = {{L"disk0",
                 L"Test disk 0 (fixture only)",
@@ -114,21 +115,245 @@ void uniform_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *fact
             Settings settings;
             settings.gpu_visible = (mask & 1U) != 0;
             settings.network_visible = (mask & 2U) != 0;
-            checked(reused.render_to(target.Get(), snapshot, settings, horizontal, false, 1, false,
-                                     false, {}));
+            checked(reused.render_to(target.Get(), snapshot, settings,
+                                     (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                     false, 1, false, false, {}));
             const auto actual = pixels(bitmap.Get(), width, height);
             Renderer fresh;
-            checked(fresh.render_to(target.Get(), snapshot, settings, horizontal, false, 1, false,
-                                    false, {}));
+            checked(fresh.render_to(target.Get(), snapshot, settings,
+                                    (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
+                                    1, false, false, {}));
             require(actual == pixels(bitmap.Get(), width, height),
                     "Visibility toggles rebuild cached production rendering exactly");
-            const auto layout = make_layout(static_cast<float>(width), static_cast<float>(height),
-                                            horizontal, snapshot.processors, 1, settings, 2);
+            const auto layout =
+                make_layout(static_cast<float>(width), static_cast<float>(height),
+                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                            snapshot.processors, 1, settings, 2);
             require(layout.fits && layout.cores.size() == 4, "Preview has four physical cores");
             if (horizontal && (mask == 3 || mask == 0)) {
                 save(wic, bitmap.Get(),
                      directory /
                          (mask == 3 ? L"uniform4-60-normal.png" : L"uniform4-60-hidden.png"));
+            }
+        }
+    }
+}
+
+void vertical_edge_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                                const std::filesystem::path &directory) {
+    using namespace loadbar;
+    constexpr UINT width = 60, height = 1400;
+    Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+    checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad,
+                              &bitmap));
+    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+    checked(factory->CreateWicBitmapRenderTarget(
+        bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+    auto snapshot = fixture();
+    Renderer reused;
+    Settings settings;
+    for (bool squares : {false, true}) {
+        settings.cpu_squares = squares;
+        for (Edge edge : {Edge::right, Edge::left, Edge::right}) {
+            for (bool hover : {false, true}) {
+                checked(reused.render_to(target.Get(), snapshot, settings, edge, false, 1, hover,
+                                         false, {}));
+                const auto actual = pixels(bitmap.Get(), width, height);
+                const auto revision = reused.layout_revision();
+                checked(reused.render_to(target.Get(), snapshot, settings, edge, false, 1, hover,
+                                         false, {}));
+                require(reused.layout_revision() == revision,
+                        "Unchanged edge reuses layout and hover caches");
+                Renderer fresh;
+                checked(fresh.render_to(target.Get(), snapshot, settings, edge, false, 1, hover,
+                                        false, {}));
+                require(actual == pixels(bitmap.Get(), width, height),
+                        "Same-size edge switches match a fresh renderer");
+                save(wic, bitmap.Get(),
+                     directory / std::format(L"{}-60-{}-{}.png",
+                                             edge == Edge::right ? L"right" : L"left",
+                                             squares ? L"squares" : L"rectangles",
+                                             hover ? L"hover" : L"normal"));
+                D2D1_MATRIX_3X2_F transform{};
+                target->GetTransform(&transform);
+                require(transform._11 == 1 && transform._22 == 1 && transform._12 == 0 &&
+                            transform._21 == 0 && transform._31 == 0 && transform._32 == 0,
+                        "Every hover path restores the render transform");
+                settings.show_hover_info = false;
+                checked(reused.render_to(target.Get(), snapshot, settings, edge, false, 1, true,
+                                         false, {}));
+                const auto disabled = pixels(bitmap.Get(), width, height);
+                checked(reused.render_to(target.Get(), snapshot, settings, edge, false, 1, false,
+                                         false, {}));
+                require(disabled == pixels(bitmap.Get(), width, height),
+                        "Disabled hover stays graphics-only on both vertical edges");
+                settings.show_hover_info = true;
+            }
+        }
+        // An opaque high-contrast CPU overlay isolates text from the tile colors underneath.
+        // Opposite quarter-turns must produce a 180-degree image rotation of the same text.
+        checked(reused.render_to(target.Get(), snapshot, settings, Edge::right, false, 1, true,
+                                 true, {}));
+        const auto right = pixels(bitmap.Get(), width, height);
+        checked(reused.render_to(target.Get(), snapshot, settings, Edge::left, false, 1, true, true,
+                                 {}));
+        const auto left = pixels(bitmap.Get(), width, height);
+        auto layout = make_snapshot_layout(width, height, Edge::right, snapshot, 1, settings);
+        snap_layout(layout, 96);
+        const auto b = layout.blocks[0].graphic;
+        const int x0 = static_cast<int>(b.x), y0 = static_cast<int>(b.y);
+        const int w = static_cast<int>(b.width), h = static_cast<int>(b.height);
+        std::size_t different{}, samples{};
+        for (int y = 5; y < h - 5; ++y) {
+            for (int x = 5; x < w - 5; ++x) {
+                const auto a =
+                    (static_cast<std::size_t>(y0 + y) * width + static_cast<std::size_t>(x0 + x)) *
+                    4;
+                const auto z = (static_cast<std::size_t>(y0 + h - 1 - y) * width +
+                                static_cast<std::size_t>(x0 + w - 1 - x)) *
+                               4;
+                for (std::size_t c = 0; c < 3; ++c) {
+                    different +=
+                        std::abs(static_cast<int>(right[a + c]) - static_cast<int>(left[z + c])) > 2
+                            ? 1U
+                            : 0U;
+                    ++samples;
+                }
+            }
+        }
+        require(samples > 100 && different * 100 < samples,
+                "Right top-down and left bottom-up hover text are opposite quarter-turns");
+    }
+    for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+        for (float text_scale : {1.0F, 1.5F, 2.25F}) {
+            target->SetDpi(dpi, dpi);
+            // Fixed pixels exercise narrow-target fallback as DPI/text scale rises.
+            // Model tests separately cover readable full-size geometry at each text scale.
+            for (Edge edge : {Edge::left, Edge::right}) {
+                checked(reused.render_to(target.Get(), snapshot, settings, edge, false, text_scale,
+                                         true, false, {}));
+                const auto actual = pixels(bitmap.Get(), width, height);
+                Renderer fresh_scale;
+                checked(fresh_scale.render_to(target.Get(), snapshot, settings, edge, false,
+                                              text_scale, true, false, {}));
+                require(actual == pixels(bitmap.Get(), width, height),
+                        "Vertical DPI and text-scale transitions match a fresh renderer");
+            }
+        }
+    }
+    target->SetDpi(96, 96);
+    bool reject = true;
+    Renderer retry([&](Renderer::ResourceKind kind, unsigned) {
+        return reject && kind == Renderer::ResourceKind::text ? E_FAIL : S_OK;
+    });
+    require(retry.render_to(target.Get(), snapshot, settings, Edge::left, false, 1, true, false,
+                            {}) == E_FAIL,
+            "Injected rotated text failure reaches recovery");
+    reject = false;
+    checked(
+        retry.render_to(target.Get(), snapshot, settings, Edge::left, false, 1, true, false, {}));
+    const auto recovered = pixels(bitmap.Get(), width, height);
+    Renderer fresh;
+    checked(
+        fresh.render_to(target.Get(), snapshot, settings, Edge::left, false, 1, true, false, {}));
+    require(recovered == pixels(bitmap.Get(), width, height),
+            "Rotated overlay failure restores clipping and transform before retry");
+}
+
+void preference_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                             const std::filesystem::path &directory) {
+    using namespace loadbar;
+    for (bool horizontal : {true, false}) {
+        constexpr UINT length = 1400, thickness = 60;
+        const UINT width = horizontal ? length : thickness,
+                   height = horizontal ? thickness : length;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        Renderer renderer;
+        auto snapshot = fixture();
+        Settings settings;
+        for (bool squares : {false, true}) {
+            settings.cpu_squares = squares;
+            for (int memory = 0; memory < 3; ++memory) {
+                snapshot.gpu_memory_capacity = memory == 0 ? 0 : 24ULL * 1073741824;
+                snapshot.gpu_memory_label = memory == 2 ? L"GPU shared" : L"GPU VRAM";
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
+                const auto resting = pixels(bitmap.Get(), width, height);
+                Renderer fresh;
+                checked(fresh.render_to(target.Get(), snapshot, settings,
+                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                        false, 1, false, false, {}));
+                require(resting == pixels(bitmap.Get(), width, height),
+                        "Square/memory transitions match a fresh layout cache");
+                save(wic, bitmap.Get(),
+                     directory / std::format(L"{}-60-{}-{}.png",
+                                             horizontal ? L"horizontal" : L"vertical",
+                                             squares ? L"squares" : L"rectangles",
+                                             memory == 0   ? L"engines-only"
+                                             : memory == 1 ? L"vram"
+                                                           : L"shared"));
+                settings.show_hover_info = false;
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
+                require(resting == pixels(bitmap.Get(), width, height) &&
+                            renderer.tooltip(20, 20, snapshot, settings).empty(),
+                        "Disabling hover removes overlays and native tooltip content");
+                settings.show_hover_info = true;
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
+                require(resting != pixels(bitmap.Get(), width, height),
+                        "Re-enabling hover restores numeric overlays");
+            }
+        }
+        if (!horizontal) {
+            const auto layout =
+                make_snapshot_layout(static_cast<float>(width), static_cast<float>(height),
+                                     loadbar::Edge::right, snapshot, 1, settings);
+            std::array<std::vector<BYTE>, 3> levels;
+            for (int level = 0; level < 3; ++level) {
+                const double value = static_cast<double>(level) * 50;
+                for (auto &metric : snapshot.gauges) {
+                    metric.value = value;
+                    metric.session_peak = 100;
+                }
+                for (auto &disk : snapshot.disks) {
+                    for (auto *metric : {&disk.active, &disk.read, &disk.write}) {
+                        metric->value = value;
+                        metric->session_peak = 100;
+                    }
+                }
+                checked(renderer.render_to(target.Get(), snapshot, settings, loadbar::Edge::right,
+                                           false, 1, false, true, {}));
+                levels[static_cast<std::size_t>(level)] = pixels(bitmap.Get(), width, height);
+            }
+            for (const auto &block : layout.blocks) {
+                if (block.kind == 0) {
+                    continue;
+                }
+                for (std::size_t i = 0; i < block.types.size() && block.types[i] != Gauge::count;
+                     ++i) {
+                    const auto b = block.meters[i];
+                    const auto pixel = [&](std::size_t level, float fraction) {
+                        const auto x = static_cast<UINT>(b.x + b.width / 2);
+                        const auto y = static_cast<UINT>(b.y + b.height * fraction);
+                        const auto offset = (static_cast<std::size_t>(y) * width + x) * 4;
+                        return std::array{levels[level][offset], levels[level][offset + 1],
+                                          levels[level][offset + 2]};
+                    };
+                    require(pixel(0, .25F) == pixel(1, .25F) && pixel(1, .25F) != pixel(2, .25F) &&
+                                pixel(0, .75F) != pixel(1, .75F) &&
+                                pixel(1, .75F) == pixel(2, .75F),
+                            "Each vertical percentage/rate meter fills bottom to top at 0/50/100 "
+                            "percent");
+                }
             }
         }
     }
@@ -154,7 +379,8 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
         Renderer renderer;
         const auto layout = make_snapshot_layout(
-            static_cast<float>(width), static_cast<float>(height), horizontal, snapshot, 1, {});
+            static_cast<float>(width), static_cast<float>(height),
+            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, {});
         require(layout.fits && layout.cores.size() == 8,
                 "Four-core/eight-thread layout has eight tiles");
         const auto center = [&](const std::vector<BYTE> &image, std::size_t tile) {
@@ -165,8 +391,9 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             return std::array{image[offset], image[offset + 1], image[offset + 2]};
         };
         for (bool contrast : {false, true}) {
-            checked(renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false,
-                                       contrast, {}));
+            checked(renderer.render_to(target.Get(), snapshot, {},
+                                       (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                       false, 1, false, contrast, {}));
             if (horizontal && !contrast) {
                 save(wic, bitmap.Get(), directory / L"uniform4-8threads-60-normal.png");
             }
@@ -174,8 +401,9 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             for (std::size_t changed = 0; changed < 8; ++changed) {
                 auto update = snapshot;
                 update.processors[changed].utilization.value = changed < 4 ? 100 : 0;
-                checked(renderer.render_to(target.Get(), update, {}, horizontal, false, 1, false,
-                                           contrast, {}));
+                checked(renderer.render_to(target.Get(), update, {},
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, contrast, {}));
                 const auto actual = pixels(bitmap.Get(), width, height);
                 for (std::size_t tile = 0; tile < 8; ++tile) {
                     require((center(actual, tile) != center(baseline, tile)) == (tile == changed),
@@ -187,20 +415,23 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             continuity.observe(retained);
             retained.processors[1].utilization.status = Status::error;
             continuity.observe(retained);
-            checked(renderer.render_to(target.Get(), retained, {}, horizontal, false, 1, false,
-                                       contrast, {}));
+            checked(renderer.render_to(target.Get(), retained, {},
+                                       (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                       false, 1, false, contrast, {}));
             require(pixels(bitmap.Get(), width, height) == baseline,
                     "SMT error retention preserves both independent thread tiles");
             auto warming = snapshot;
             warming.processors[0].utilization.status = Status::warming_up;
-            checked(renderer.render_to(target.Get(), warming, {}, horizontal, false, 1, false,
-                                       contrast, {}));
+            checked(renderer.render_to(target.Get(), warming, {},
+                                       (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                       false, 1, false, contrast, {}));
             require(pixels(bitmap.Get(), width, height) == baseline,
                     "Never-observed thread warmup renders as zero without marks");
         }
         std::ranges::reverse(snapshot.processors);
         const auto reordered = make_snapshot_layout(
-            static_cast<float>(width), static_cast<float>(height), horizontal, snapshot, 1, {});
+            static_cast<float>(width), static_cast<float>(height),
+            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, {});
         for (std::size_t tile = 0; tile < 8; ++tile) {
             require(reordered.cores[tile].logical == layout.cores[tile].logical,
                     "CPU tile identity order is stable across reordered samples");
@@ -232,13 +463,15 @@ void bounded_glow_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
             }
             return S_OK;
         });
-        checked(
-            renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false, false, {}));
+        checked(renderer.render_to(target.Get(), snapshot, {},
+                                   (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
+                                   1, false, false, {}));
         const auto cold_count = creations;
         const auto cold = pixels(bitmap.Get(), width, height);
         require(cold_count > 0 && largest > 32000, "Large fixture exercises bounded glow masks");
-        checked(
-            renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, false, false, {}));
+        checked(renderer.render_to(target.Get(), snapshot, {},
+                                   (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
+                                   1, false, false, {}));
         require(creations == cold_count && pixels(bitmap.Get(), width, height) == cold,
                 "Bounded glows cache without repeated construction or pixel changes");
     }
@@ -267,7 +500,8 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
                 }
                 const auto layout =
                     make_snapshot_layout(static_cast<float>(width), static_cast<float>(height),
-                                         horizontal, snapshot, 1, settings);
+                                         (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                         snapshot, 1, settings);
                 require(layout.fits && layout.cores.size() == snapshot.processors.size(),
                         "Disk visibility retains every CPU core in both orientations");
                 std::size_t disk_blocks{};
@@ -289,12 +523,14 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
                 require(disk_blocks == disk_widget_count(snapshot.disks, settings) &&
                             layout.blocks.size() == 2 + disk_blocks + (extras ? 2 : 0),
                         "Hidden disks have no placeholder and remaining widgets fill space");
-                checked(reused.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                         false, false, {}));
+                checked(reused.render_to(target.Get(), snapshot, settings,
+                                         (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                         false, 1, false, false, {}));
                 const auto actual = pixels(bitmap.Get(), width, height);
                 Renderer fresh;
-                checked(fresh.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                        false, false, {}));
+                checked(fresh.render_to(target.Get(), snapshot, settings,
+                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                        false, 1, false, false, {}));
                 require(actual == pixels(bitmap.Get(), width, height),
                         "Same-count disk swaps invalidate cached layout identities");
                 auto changed = snapshot;
@@ -304,8 +540,9 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
                         disk.read.value = disk.write.value = 0;
                     }
                 }
-                checked(reused.render_to(target.Get(), changed, settings, horizontal, false, 1,
-                                         false, false, {}));
+                checked(reused.render_to(target.Get(), changed, settings,
+                                         (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                         false, 1, false, false, {}));
                 require(actual == pixels(bitmap.Get(), width, height),
                         "Hidden disk readings cannot affect visible rendering");
             }
@@ -318,7 +555,7 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
     require(disk_widget_count(changed.disks, settings) == 1,
             "New drive is visible even when prior drives were all hidden");
     changed.disks.clear();
-    const auto absent = make_snapshot_layout(1400, 80, true, changed, 1, settings);
+    const auto absent = make_snapshot_layout(1400, 80, loadbar::Edge::top, changed, 1, settings);
     require(disk_widget_count(changed.disks, settings) == 1 &&
                 std::ranges::count(absent.blocks, 3U, &Layout::Block::kind) == 1,
             "No discovered drives still produces the explicit unavailable placeholder");
@@ -338,7 +575,8 @@ void contrast_load_regression(IWICImagingFactory *wic, ID2D1Factory *factory) {
         for (auto &cpu : snapshot.processors) {
             cpu.utilization.value = value;
         }
-        checked(renderer.render_to(target.Get(), snapshot, {}, true, false, 1, false, true, {}));
+        checked(renderer.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, false,
+                                   true, {}));
         auto actual = pixels(bitmap.Get(), 1274, 40);
         require(actual != previous, "Resting high-contrast CPU images distinguish 0/50/100% load");
         previous = std::move(actual);
@@ -376,7 +614,8 @@ void contrast_palette_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                     return palettes[palette_index][index == COLOR_WINDOWTEXT ? 1 : 0];
                 });
             auto snapshot = fixture();
-            auto layout = make_layout(target->GetSize().width, target->GetSize().height, horizontal,
+            auto layout = make_layout(target->GetSize().width, target->GetSize().height,
+                                      (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                       snapshot.processors, 1, {}, snapshot.disks.size());
             snap_layout(layout, static_cast<float>(dpi));
             require(layout.fits, "High-contrast test layout fits every core");
@@ -388,8 +627,9 @@ void contrast_palette_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                 return std::array{bytes[offset + 2], bytes[offset + 1], bytes[offset]};
             };
             const auto render = [&](bool contrast, bool hover = false) {
-                checked(renderer.render_to(target.Get(), snapshot, {}, horizontal, false, 1, hover,
-                                           contrast, {}));
+                checked(renderer.render_to(target.Get(), snapshot, {},
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, hover, contrast, {}));
                 return pixels(bitmap.Get(), width, height);
             };
             for (; palette_index < palettes.size(); ++palette_index) {
@@ -485,7 +725,8 @@ void continuity_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
         const auto properties = D2D1::RenderTargetProperties();
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(drawing.render_to(target.Get(), snapshot, {}, true, false, 1, hover, contrast, {}));
+        checked(drawing.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, hover,
+                                  contrast, {}));
         save(wic, bitmap.Get(), directory / std::format(L"continuity-{}.png", artifact++));
         return pixels(bitmap.Get(), 1274, height);
     };
@@ -525,6 +766,8 @@ void continuity_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
     zero.ram_used_bytes.value = zero.gpu_memory_bytes.value = 0;
     zero.ram_used_bytes.retained.reset();
     zero.gpu_memory_bytes.retained.reset();
+    // Never-observed memory is intentionally omitted, including during initial warm-up.
+    zero.gpu_memory_capacity = 0;
     auto warming = original;
     set_snapshot_status(warming, Status::warming_up, L"Initial warm-up");
     DisplayContinuity cold;
@@ -566,8 +809,9 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         auto properties = D2D1::RenderTargetProperties();
         properties.dpiX = properties.dpiY = dpi;
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(renderer.render_to(target.Get(), sample, {}, horizontal, false, text_scale, hover,
-                                   contrast, {}));
+        checked(renderer.render_to(target.Get(), sample, {},
+                                   (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
+                                   text_scale, hover, contrast, {}));
         if (keep) {
             save(wic, bitmap.Get(), directory / std::format(L"scaling-{}.png", artifact++));
         }
@@ -599,8 +843,9 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
             }
         }
         for (float text_scale : {1.5F, 2.25F}) {
-            const auto minimum = static_cast<float>(minimum_thickness(
-                1080, 480, false, snapshot.processors, text_scale, {}, snapshot.disks.size()));
+            const auto minimum = static_cast<float>(
+                minimum_thickness(1080, 480, loadbar::Edge::right, snapshot.processors, text_scale,
+                                  {}, snapshot.disks.size()));
             require(minimum <= 480, "Vertical scaling fixture fits");
             Renderer fresh;
             require(render(reused, snapshot, minimum * 2, 1080, false, text_scale, dpi, true, false,
@@ -628,8 +873,10 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
     const auto compact_pixels = render(reused, snapshot, 3840, 40, true, 1, 96, true, false, false);
     const auto enlarged_pixels =
         render(reused, snapshot, 3840, 80, true, 1, 96, true, false, false);
-    const auto small_layout = make_layout(3840, 40, true, snapshot.processors, 1, {}, 2);
-    const auto large_layout = make_layout(3840, 80, true, snapshot.processors, 1, {}, 2);
+    const auto small_layout =
+        make_layout(3840, 40, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
+    const auto large_layout =
+        make_layout(3840, 80, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
     const auto small_ink = ink_height(compact_pixels, small_layout.blocks[0].graphic);
     const auto large_ink = ink_height(enlarged_pixels, large_layout.blocks[0].graphic);
     require(small_ink > 0 && large_ink >= small_ink * 3 / 2,
@@ -648,17 +895,21 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         auto properties = D2D1::RenderTargetProperties();
         properties.dpiX = properties.dpiY = 96;
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(retry.render_to(target.Get(), snapshot, {}, true, false, 1, true, false, {}));
-        const auto before = make_layout(1000, 400, true, snapshot.processors, 1, {}, 2);
-        const auto after = make_layout(1000, 400, true, snapshot.processors, 2.25F, {}, 2);
+        checked(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, true,
+                                false, {}));
+        const auto before =
+            make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
+        const auto after =
+            make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 2.25F, {}, 2);
         require(before.fits && after.fits && before.content_scale != after.content_scale,
                 "Font retry fixture changes effective scale on the same target");
         armed = true;
-        require(retry.render_to(target.Get(), snapshot, {}, true, false, 2.25F, true, false, {}) ==
-                    E_OUTOFMEMORY,
+        require(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 2.25F, true,
+                                false, {}) == E_OUTOFMEMORY,
                 "Font failure during scale change preserves native error");
         armed = false;
-        checked(retry.render_to(target.Get(), snapshot, {}, true, false, 2.25F, true, false, {}));
+        checked(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 2.25F, true,
+                                false, {}));
         Renderer fresh;
         require(pixels(bitmap.Get(), 1000, 400) ==
                     render(fresh, snapshot, 1000, 400, true, 2.25F, 96, true, false, false),
@@ -679,6 +930,8 @@ int wmain(int argc, wchar_t **argv) {
         checked(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.GetAddressOf()));
         const std::filesystem::path directory(argv[1]);
         std::filesystem::create_directories(directory);
+        vertical_edge_render_tests(wic.Get(), factory.Get(), directory);
+        preference_render_tests(wic.Get(), factory.Get(), directory);
         uniform_visibility_render_tests(wic.Get(), factory.Get(), directory);
         drive_visibility_render_tests(wic.Get(), factory.Get());
         logical_processor_render_tests(wic.Get(), factory.Get(), directory);
@@ -695,11 +948,11 @@ int wmain(int argc, wchar_t **argv) {
                                            : variant == 1 ? 800U
                                            : variant == 2 ? 1274U
                                                           : 140U;
-                const unsigned dip_height = horizontal
-                                                ? static_cast<unsigned>(loadbar::minimum_thickness(
-                                                      static_cast<float>(dip_width), 480, true,
-                                                      fixture().processors, 1, {}, 2))
-                                                : 1000U;
+                const unsigned dip_height =
+                    horizontal ? static_cast<unsigned>(loadbar::minimum_thickness(
+                                     static_cast<float>(dip_width), 480, loadbar::Edge::top,
+                                     fixture().processors, 1, {}, 2))
+                               : 1000U;
                 require(dip_height <= 1000, "Fixture layout must fit");
                 const unsigned width = (dip_width * dpi + 95) / 96,
                                height = (dip_height * dpi + 95) / 96;
@@ -722,26 +975,31 @@ int wmain(int argc, wchar_t **argv) {
                 });
                 auto snapshot = fixture();
                 loadbar::Settings settings;
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           false, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
                 const auto resting = pixels(bitmap.Get(), width, height);
-                auto layout = loadbar::make_layout(
-                    target->GetSize().width, target->GetSize().height, horizontal,
-                    snapshot.processors, 1, settings, snapshot.disks.size());
+                auto layout =
+                    loadbar::make_layout(target->GetSize().width, target->GetSize().height,
+                                         (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                         snapshot.processors, 1, settings, snapshot.disks.size());
                 loadbar::snap_layout(layout, static_cast<float>(dpi));
                 require(layout.fits && layout.blocks.size() == 6,
                         "Actual renderer size includes both disks");
                 const auto initial_glows = glow_creations;
                 const auto revision = renderer.layout_revision();
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           true, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                 const auto initial_text = text_creations;
                 require(initial_glows > 0 && initial_text > 0,
                         "Optimization fixture exercises glow and text resources");
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           false, false, {}));
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           true, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                 require(text_creations == initial_text && glow_creations == initial_glows,
                         "Rest/hover transitions reuse text layouts and glow masks");
                 require(renderer.layout_revision() == revision,
@@ -759,8 +1017,9 @@ int wmain(int argc, wchar_t **argv) {
                 }
                 require(renderer.tooltip_target(-1, -1) == 0,
                         "Tooltip background has a separate target");
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           false, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
                 require(pixels(bitmap.Get(), width, height) == resting,
                         "Cache reuse preserves resting pixels");
                 if (dpi == 96 && variant == 2) {
@@ -769,8 +1028,10 @@ int wmain(int argc, wchar_t **argv) {
                         for (auto &cpu : solid.processors) {
                             cpu.utilization.value = value;
                         }
-                        checked(renderer.render_to(target.Get(), solid, settings, horizontal, false,
-                                                   1, false, false, {}));
+                        checked(renderer.render_to(
+                            target.Get(), solid, settings,
+                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false, 1,
+                            false, false, {}));
                         const auto actual = pixels(bitmap.Get(), width, height);
                         const auto cell = layout.cores[0].label;
                         const auto color = loadbar::heat_color(value);
@@ -798,8 +1059,10 @@ int wmain(int argc, wchar_t **argv) {
                             disk.read.value = *disk.read.session_peak * percent / 100;
                             disk.write.value = *disk.write.session_peak * percent / 100;
                         }
-                        checked(renderer.render_to(target.Get(), bars, settings, horizontal, false,
-                                                   1, false, false, {}));
+                        checked(renderer.render_to(
+                            target.Get(), bars, settings,
+                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false, 1,
+                            false, false, {}));
                         const auto actual = pixels(bitmap.Get(), width, height);
                         for (std::size_t block : {3U, 4U}) {
                             require(layout.blocks[block].types ==
@@ -839,8 +1102,10 @@ int wmain(int argc, wchar_t **argv) {
                             }
                         }
                     }
-                    checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false,
-                                               1, false, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
                 }
                 if (dpi == 96 && variant == 0) {
                     for (auto kind : {loadbar::Renderer::ResourceKind::icon,
@@ -862,11 +1127,15 @@ int wmain(int argc, wchar_t **argv) {
                                     }
                                     return S_OK;
                                 });
-                            require(retry.render_to(target.Get(), snapshot, settings, horizontal,
-                                                    false, 1, false, false, {}) == E_OUTOFMEMORY,
+                            require(retry.render_to(
+                                        target.Get(), snapshot, settings,
+                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                        false, 1, false, false, {}) == E_OUTOFMEMORY,
                                     "Injected creation failure retains native HRESULT");
-                            checked(retry.render_to(target.Get(), snapshot, settings, horizontal,
-                                                    false, 1, false, false, {}));
+                            checked(retry.render_to(
+                                target.Get(), snapshot, settings,
+                                (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false, 1,
+                                false, false, {}));
                             require(pixels(bitmap.Get(), width, height) == resting,
                                     "Partial resource creation retry fully reconstructs rendering");
                         }
@@ -876,12 +1145,14 @@ int wmain(int argc, wchar_t **argv) {
                      directory / std::format(L"{}-{}-rest.png", dpi, variant));
                 ++rendered;
                 renderer.discard();
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           false, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
                 require(pixels(bitmap.Get(), width, height) == resting,
                         "Discard/recreate changes stable rendering");
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           true, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                 require(pixels(bitmap.Get(), width, height) != resting,
                         "Hover values must change pixels");
                 if (dpi == 96 && variant == 2) {
@@ -889,25 +1160,33 @@ int wmain(int argc, wchar_t **argv) {
                     auto capacity_changed = snapshot;
                     capacity_changed.ram_used_bytes.value *= 2;
                     capacity_changed.ram_total_bytes *= 2;
-                    checked(renderer.render_to(target.Get(), capacity_changed, settings, horizontal,
-                                               false, 1, true, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), capacity_changed, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                     require(
                         pixels(bitmap.Get(), width, height) != original_hover,
                         "RAM capacity changes hover pixels while the percentage stays constant");
-                    checked(renderer.render_to(target.Get(), capacity_changed, settings, horizontal,
-                                               false, 1, false, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), capacity_changed, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, false, false, {}));
                     require(pixels(bitmap.Get(), width, height) == resting,
                             "RAM capacity changes no resting graphics at the same percentage");
-                    checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false,
-                                               1, true, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                 }
                 if (dpi == 96 && variant == 1) {
                     const auto narrow_hover = pixels(bitmap.Get(), width, height);
                     auto oversized_capacity = snapshot;
                     oversized_capacity.ram_used_bytes.value *= 1000;
                     oversized_capacity.ram_total_bytes *= 1000;
-                    checked(renderer.render_to(target.Get(), oversized_capacity, settings,
-                                               horizontal, false, 1, true, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), oversized_capacity, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                     const auto ellipsis = pixels(bitmap.Get(), width, height);
                     require(ellipsis != narrow_hover,
                             "Oversized RAM capacity selects explicit ellipsis fallback");
@@ -915,8 +1194,10 @@ int wmain(int argc, wchar_t **argv) {
                     ++rendered;
                     oversized_capacity.ram_used_bytes.value *= 2;
                     oversized_capacity.ram_total_bytes *= 2;
-                    checked(renderer.render_to(target.Get(), oversized_capacity, settings,
-                                               horizontal, false, 1, true, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), oversized_capacity, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                     require(pixels(bitmap.Get(), width, height) == ellipsis,
                             "Too-wide capacities keep the same ellipsis plus unchanged percentage");
                     const auto ram_box = layout.blocks[1].bounds;
@@ -924,14 +1205,17 @@ int wmain(int argc, wchar_t **argv) {
                                                              oversized_capacity, settings, {});
                     require(tip.find(L"94000.0/126800.0GB 74%") != std::wstring::npos,
                             "Ellipsized RAM retains full truthful values in the tooltip");
-                    checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false,
-                                               1, true, false, {}));
+                    checked(
+                        renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
                 }
                 save(wic.Get(), bitmap.Get(),
                      directory / std::format(L"{}-{}-hover.png", dpi, variant));
                 ++rendered;
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, false, 1,
-                                           true, true, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, true, {}));
                 save(wic.Get(), bitmap.Get(),
                      directory / std::format(L"{}-{}-contrast.png", dpi, variant));
                 ++rendered;
@@ -946,8 +1230,9 @@ int wmain(int argc, wchar_t **argv) {
                     disk.read.status = loadbar::Status::unavailable;
                     disk.write.status = loadbar::Status::error;
                 }
-                checked(renderer.render_to(target.Get(), snapshot, settings, horizontal, true, 1,
-                                           false, false, {}));
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           true, 1, false, false, {}));
                 save(wic.Get(), bitmap.Get(),
                      directory / std::format(L"{}-{}-missing.png", dpi, variant));
                 ++rendered;

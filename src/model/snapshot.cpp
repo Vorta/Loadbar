@@ -9,6 +9,14 @@
 #include <tuple>
 
 namespace loadbar {
+bool gpu_memory_visible(const Snapshot &snapshot) noexcept {
+    const auto &percent = snapshot.gauges[static_cast<std::size_t>(Gauge::gpu_memory)];
+    return snapshot.gpu_memory_capacity > 0 &&
+           (percent.status == Status::valid || percent.retained.has_value()) &&
+           (snapshot.gpu_memory_bytes.status == Status::valid ||
+            snapshot.gpu_memory_bytes.retained.has_value());
+}
+
 void set_physical_memory(Snapshot &snapshot, std::uint64_t total, std::uint64_t available,
                          Clock::time_point now) {
     Metric percent{0, Status::error, Unit::percent, now, {}, {}};

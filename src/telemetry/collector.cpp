@@ -411,53 +411,50 @@ void collect_gpu_impl(Snapshot &snapshot, const Device &device, Clock::time_poin
                       const ReadShared &read_shared, GpuSamples &cache) {
     snapshot.gpu_label = device.label;
     snapshot.gpu_id = device.id;
-    // Scope metadata must survive an exception in any subsequent GPU query.
-    snapshot.gpu_memory_label = device.integrated ? L"GPU shared" : L"GPU VRAM";
-    snapshot.gpu_memory_capacity = device.integrated ? device.shared_capacity : device.capacity;
-    try {
-        const auto read = [](const auto &source) {
+    snapshot.gpu_memory_label = L"GPU VRAM";
+    snapshot.gpu_memory_capacity = device.capacity;
+    // Query failures are isolated: an engine failure must not suppress either memory source.
+    const auto read = [](const auto &source) -> decltype(source()) {
+        try {
             auto values = source();
             if (values && values->size() != 1) {
-                values = std::unexpected(Error{L"GPU counter array count", ERROR_INVALID_DATA});
+                return std::unexpected(Error{L"GPU counter array count", ERROR_INVALID_DATA});
             }
             return values;
-        };
-        const auto values = read(read_engines);
-        if (values) {
-            cache.read((*values)[0], device.runtime_id);
-            gauge(snapshot, Gauge::gpu_3d) = cache.aggregate(device.runtime_id, L"3D", now);
-            gauge(snapshot, Gauge::gpu_decode) =
-                cache.aggregate(device.runtime_id, L"VideoDecode", now);
-        } else {
-            gauge(snapshot, Gauge::gpu_3d) = failed(now, Unit::percent, values.error());
-            gauge(snapshot, Gauge::gpu_decode) = gauge(snapshot, Gauge::gpu_3d);
+        } catch (...) {
+            return std::unexpected(Error{L"GPU provider exception", ERROR_UNHANDLED_EXCEPTION});
         }
-        const auto memory = read(read_dedicated);
-        gauge(snapshot, Gauge::gpu_memory) =
-            memory ? memory_percentage((*memory)[0], device, device.capacity, now,
-                                       &snapshot.gpu_memory_bytes)
-                   : failed(now, Unit::percent, memory.error());
-        if (device.integrated) {
-            const auto shared = read(read_shared);
-            // The main meter uses the separately labelled shared limit on UMA; dedicated state
-            // remains in its description rather than being added to a different memory segment.
-            const auto dedicated_text = metric_text(gauge(snapshot, Gauge::gpu_memory));
-            gauge(snapshot, Gauge::gpu_memory) =
-                shared ? memory_percentage((*shared)[0], device, device.shared_capacity, now,
-                                           &snapshot.gpu_memory_bytes)
-                       : failed(now, Unit::percent, shared.error());
-            if (!shared) {
-                snapshot.gpu_memory_bytes.status = Status::unavailable;
-            }
-            gauge(snapshot, Gauge::gpu_memory).detail +=
-                L" Dedicated: " + dedicated_text +
-                L"; shared percentage of reported adapter shared-memory limit.";
+    };
+    const auto values = read(read_engines);
+    if (values) {
+        cache.read((*values)[0], device.runtime_id);
+        gauge(snapshot, Gauge::gpu_3d) = cache.aggregate(device.runtime_id, L"3D", now);
+        gauge(snapshot, Gauge::gpu_decode) =
+            cache.aggregate(device.runtime_id, L"VideoDecode", now);
+    } else {
+        gauge(snapshot, Gauge::gpu_3d) = failed(now, Unit::percent, values.error());
+        gauge(snapshot, Gauge::gpu_decode) = gauge(snapshot, Gauge::gpu_3d);
+    }
+    const auto memory = read(read_dedicated);
+    auto &selected = gauge(snapshot, Gauge::gpu_memory);
+    selected = memory ? memory_percentage((*memory)[0], device, device.capacity, now,
+                                          &snapshot.gpu_memory_bytes)
+                      : failed(now, Unit::percent, memory.error());
+    if (selected.status != Status::valid) {
+        const auto dedicated = selected;
+        const auto shared = read(read_shared);
+        selected = shared ? memory_percentage((*shared)[0], device, device.shared_capacity, now,
+                                              &snapshot.gpu_memory_bytes)
+                          : failed(now, Unit::percent, shared.error());
+        if (selected.status == Status::valid) {
+            snapshot.gpu_memory_label = L"GPU shared";
+            snapshot.gpu_memory_capacity = device.shared_capacity;
+        } else if (dedicated.status == Status::error) {
+            selected.status = Status::error;
         }
-    } catch (...) {
-        for (auto kind : {Gauge::gpu_3d, Gauge::gpu_decode, Gauge::gpu_memory}) {
-            gauge(snapshot, kind) =
-                failed(now, Unit::percent, {L"GPU provider exception", ERROR_UNHANDLED_EXCEPTION});
-        }
+        selected.detail +=
+            L"; dedicated: " + status_text(dedicated.status) + L" " + dedicated.detail;
+        selected.detail += L"; shared percentage uses the reported adapter shared-memory limit";
     }
     if (gauge(snapshot, Gauge::gpu_memory).status != Status::valid) {
         snapshot.gpu_memory_bytes = gauge(snapshot, Gauge::gpu_memory);
