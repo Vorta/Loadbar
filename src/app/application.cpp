@@ -19,6 +19,7 @@ constexpr UINT kLayoutMessage = WM_APP + 3;
 constexpr UINT kSampleMessage = WM_APP + 4;
 constexpr UINT kPreferencesMessage = WM_APP + 5;
 constexpr UINT kExit = 100;
+constexpr UINT kLicenses = 103;
 constexpr UINT kSettings = 101;
 constexpr UINT kRetry = 102;
 constexpr UINT kEdgeBase = 200;
@@ -332,6 +333,7 @@ void Application::tray_menu() {
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kExit, L"E&xit");
+    AppendMenuW(menu, MF_STRING, kLicenses, L"&Licenses…");
     POINT point{};
     GetCursorPos(&point);
     SetForegroundWindow(window_);
@@ -416,7 +418,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             const int id = GetDlgCtrlID(message_pointer<HWND>(lparam));
             if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus ||
                 id == kDrivesLabel || id == kCpuSquares || id == kHoverInfo ||
-                id == kTaskManagerClick || id == kTooltips) {
+                id == kTaskManagerClick || id == kTooltips || id == kTemperatures) {
                 const auto dc = message_pointer<HDC>(wparam);
                 const auto color = IsWindowEnabled(message_pointer<HWND>(lparam)) ? COLOR_WINDOWTEXT
                                                                                   : COLOR_GRAYTEXT;
@@ -461,7 +463,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             return 0;
         }
         if (window == settings_window_ && lparam != 0 && command >= kCpuSquares &&
-            command <= kTooltips) {
+            command <= kTemperatures) {
             update_settings_actions();
             return 0;
         }
@@ -489,6 +491,10 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
         }
         if (command == kExit) {
             shutdown();
+            return 0;
+        }
+        if (command == kLicenses) {
+            show_licenses(window_);
             return 0;
         }
         if (command == kSettings) {

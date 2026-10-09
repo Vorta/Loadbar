@@ -18,9 +18,10 @@ struct Layout {
     bool fits{};
     // Windows text scale multiplied by optional, space-limited widget magnification.
     float content_scale{1};
+    float temperature_font_size{9};
     std::vector<CoreBox> cores;
     struct Block {
-        Box bounds, icon, graphic;
+        Box bounds, icon, graphic, temperature;
         unsigned kind{}; // Icon/family: CPU, RAM, GPU, physical disk, network.
         std::size_t disk{};
         std::array<Gauge, 3> types{Gauge::count, Gauge::count, Gauge::count};
@@ -33,6 +34,8 @@ struct Layout {
                                      Clock::time_point now, unsigned interval_ms);
 [[nodiscard]] MetricView block_metric(const Layout::Block &block, Gauge gauge,
                                       const Snapshot &snapshot);
+[[nodiscard]] const TemperatureReading *block_temperature(const Layout::Block &block,
+                                                          const Snapshot &snapshot) noexcept;
 [[nodiscard]] std::wstring core_label(const CoreBox &core);
 void snap_layout(Layout &layout, float dpi);
 [[nodiscard]] float glow_padding_dips(float content_scale, float dpi);

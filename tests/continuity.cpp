@@ -309,10 +309,12 @@ void selection_and_failure_tests() {
     b.network_id = L"nic-b";
     c.gpu_id = L"gpu-c";
     c.network_id = L"nic-c";
-    auto first = sample();
+    const auto first_storage = std::make_unique<Snapshot>(sample());
+    auto &first = *first_storage;
     peaks.observe(first);
     state.observe(first, a);
-    auto other = sample(2);
+    const auto other_storage = std::make_unique<Snapshot>(sample(2));
+    auto &other = *other_storage;
     other.gpu_id = b.gpu_id;
     other.network_id = b.network_id;
     other.gpu_memory_label = L"GPU shared";
@@ -321,7 +323,8 @@ void selection_and_failure_tests() {
     other.gauges[1].value = 90;
     other.gauges[4].value = 350;
     state.observe(other, b);
-    auto gone = sample(3);
+    const auto gone_storage = std::make_unique<Snapshot>(sample(3));
+    auto &gone = *gone_storage;
     gone.gpu_id.clear();
     gone.network_id.clear();
     gone.gpu_memory_label = L"GPU memory";
@@ -485,7 +488,7 @@ void appearance_tests() {
             "Exact disk hues");
     const auto old = decode_settings(L"Loadbar 4 2 6 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 1");
     require(old && encode_settings(*old) ==
-                       L"Loadbar 11 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 0 0 0 1 1 1",
+                       L"Loadbar 12 2 40 1000 \"monitor\" \"gpu\" \"nic\" 1 1 1 0 0 0 1 1 1 1",
             "Migration retires appearance switches and raises old sizes to 40 DIPs");
     require(!decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 1 0 0 0") &&
                 !decode_settings(L"Loadbar 5 2 6 1000 \"\" \"\" \"\" 3"),

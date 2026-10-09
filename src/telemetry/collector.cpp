@@ -195,8 +195,8 @@ Collector::Collector(SessionPeaks &peaks, DiskInventory &disks, CpuSamples &proc
       gpu_engines_({L"\\GPU Engine(*)\\Utilization Percentage"}, Unit::percent),
       gpu_memory_({L"\\GPU Adapter Memory(*)\\Dedicated Usage"}, Unit::bytes),
       gpu_shared_({L"\\GPU Adapter Memory(*)\\Shared Usage"}, Unit::bytes) {}
-void Collector::configure(const Settings &settings, bool reset, bool reset_gpu,
-                          bool reset_network) {
+void Collector::configure(const Settings &settings, bool reset, bool reset_gpu, bool reset_network,
+                          bool reset_temperatures) {
     auto discovery = discover_ ? discover_() : discover_devices();
     auto &catalog = discovery.catalog;
     const bool disk_recovered = disk_discovery_error_ && !discovery.disk_error;
@@ -261,6 +261,8 @@ void Collector::configure(const Settings &settings, bool reset, bool reset_gpu,
     gpu_ = gpu;
     network_visible_ = settings.network_visible;
     gpu_visible_ = settings.gpu_visible;
+    temperatures_.configure(catalog_, gpu_, settings, reset || reset_temperatures,
+                            disk_discovery_error_.has_value(), reset_gpu);
 }
 void Collector::cpu(Snapshot &snapshot, Clock::time_point now) {
     auto values = cpu_.sample(now);
@@ -546,16 +548,18 @@ Snapshot Collector::sample(Clock::time_point now) {
                                                       : snapshot.network_id;
     }
     peaks_.observe(snapshot);
+    temperatures_.sample(snapshot, now);
     return snapshot;
 }
 SamplingWorker::SamplingWorker(HWND target, UINT message, Latest<Delivery> &destination,
                                SessionPeaks &peaks, DisplayContinuity &continuity,
                                DiskInventory &disks, CpuSamples &processors, Settings settings,
-                               std::uint64_t generation, std::uint64_t worker_id)
+                               std::uint64_t generation, std::uint64_t worker_id,
+                               bool initially_paused)
     : target_(target), message_(message), destination_(destination), peaks_(peaks),
       continuity_(continuity), known_disks_(disks), cpu_samples_(processors),
-      settings_(std::move(settings)), generation_(generation), worker_id_(worker_id),
-      thread_([this](const std::stop_token &token) { run(token); }) {}
+      settings_(std::move(settings)), paused_(initially_paused), generation_(generation),
+      worker_id_(worker_id), thread_([this](const std::stop_token &token) { run(token); }) {}
 SamplingWorker::~SamplingWorker() {
     stop();
 }
@@ -569,6 +573,9 @@ void SamplingWorker::configure(Settings settings, bool paused, bool reset) {
         if (settings.network_id != settings_.network_id ||
             settings.network_visible != settings_.network_visible) {
             ++network_generation_;
+        }
+        if (settings.show_temperatures != settings_.show_temperatures) {
+            ++temperature_generation_;
         }
         settings_ = std::move(settings);
         paused_ = paused;
@@ -590,11 +597,13 @@ void SamplingWorker::run(const std::stop_token &token) noexcept {
     const auto initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     try {
         Collector collector(peaks_, known_disks_, cpu_samples_);
-        std::uint64_t applied{}, applied_reset{}, applied_gpu{}, applied_network{};
+        std::uint64_t applied{}, applied_reset{}, applied_gpu{}, applied_network{},
+            applied_temperature{};
         std::shared_ptr<const Catalog> catalog;
         auto next_discovery = Clock::time_point{};
         Settings settings;
         std::uint64_t generation{}, reset_generation{}, gpu_generation{}, network_generation{};
+        std::uint64_t temperature_generation{};
         bool copied_settings{};
         while (!token.stop_requested()) {
             {
@@ -609,6 +618,7 @@ void SamplingWorker::run(const std::stop_token &token) noexcept {
                     reset_generation = reset_generation_;
                     gpu_generation = gpu_generation_;
                     network_generation = network_generation_;
+                    temperature_generation = temperature_generation_;
                     copied_settings = true;
                 }
             }
@@ -616,10 +626,12 @@ void SamplingWorker::run(const std::stop_token &token) noexcept {
             if (applied != generation || begin >= next_discovery) {
                 collector.configure(settings, applied_reset != reset_generation,
                                     applied_gpu != gpu_generation,
-                                    applied_network != network_generation);
+                                    applied_network != network_generation,
+                                    applied_temperature != temperature_generation);
                 applied_gpu = gpu_generation;
                 applied_network = network_generation;
                 applied_reset = reset_generation;
+                applied_temperature = temperature_generation;
                 applied = generation;
                 next_discovery = begin + std::chrono::seconds(30);
                 if (!catalog || !same_catalog(*catalog, collector.catalog())) {

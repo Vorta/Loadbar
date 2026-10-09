@@ -18,6 +18,14 @@ inline constexpr auto kDivider = rgb(0x232832);
 inline constexpr auto kPrimary = rgb(0xE8EDF4);
 inline constexpr auto kSecondary = rgb(0x9AA4B2);
 inline constexpr auto kCpuIcon = rgb(0xAEB7C4);
+struct TemperatureAppearance {
+    Color icon, text;
+    float glow_alpha{};
+    bool operator==(const TemperatureAppearance &) const = default;
+};
+[[nodiscard]] Color component_icon_color(unsigned component) noexcept;
+[[nodiscard]] TemperatureAppearance temperature_appearance(unsigned component,
+                                                           double celsius) noexcept;
 struct Palette {
     Color hue, track, text;
 };

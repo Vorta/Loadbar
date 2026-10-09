@@ -2,6 +2,7 @@
 
 #include "model/model.hpp"
 #include "model/settings.hpp"
+#include "model/temperature.hpp"
 
 #include <array>
 #include <compare>
@@ -34,6 +35,9 @@ struct Device {
     bool integrated{};
     bool memory_scope_known{};
     bool preferred{};
+    // Runtime interface path obtained alongside the stable disk identity; never persisted.
+    std::wstring device_path;
+    unsigned vendor_id{}; // GPU PCI vendor, discovery metadata only.
     bool operator==(const Device &) const = default;
 };
 struct Catalog {
@@ -69,6 +73,7 @@ struct DiskReading {
     Metric read{0, Status::unavailable, Unit::bytes_per_second, {}, {}, L"Disk counter absent"};
     Metric write{read};
     Metric active{0, Status::unavailable, Unit::percent, {}, {}, L"Disk idle counter absent"};
+    TemperatureReading temperature;
 };
 [[nodiscard]] std::size_t disk_widget_count(std::span<const DiskReading> disks,
                                             const Settings &settings);
@@ -92,6 +97,21 @@ struct Snapshot {
     std::uint64_t gpu_memory_capacity{};
     Metric ram_used_bytes{0, Status::unavailable, Unit::bytes, {}, {}, {}};
     std::uint64_t ram_total_bytes{};
+    TemperatureReading cpu_temperature{
+        {0,
+         Status::unavailable,
+         Unit::celsius,
+         {},
+         {},
+         L"CPU temperature awaiting an available ASUS firmware interface"}};
+    TemperatureReading ram_temperature{
+        {0,
+         Status::unavailable,
+         Unit::celsius,
+         {},
+         {},
+         L"RAM temperature collection is not implemented under the standalone/no-driver policy"}};
+    TemperatureReading gpu_temperature;
 };
 [[nodiscard]] bool gpu_memory_visible(const Snapshot &snapshot) noexcept;
 void set_physical_memory(Snapshot &snapshot, std::uint64_t total, std::uint64_t available,

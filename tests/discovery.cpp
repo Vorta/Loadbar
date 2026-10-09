@@ -136,6 +136,38 @@ void topology_api_tests() {
 
 namespace loadbar {
 struct CollectorDiscoveryTests {
+    static void temperature_coalescing() {
+        SessionPeaks peaks;
+        DiskInventory disks;
+        CpuSamples processors;
+        DisplayContinuity continuity;
+        Latest<Delivery> deliveries;
+        Settings settings;
+        // Start paused so this exercises real worker configuration without hardware reads.
+        SamplingWorker worker(nullptr, WM_APP, deliveries, peaks, continuity, disks, processors,
+                              settings, 1, 1, true);
+        settings.show_temperatures = false;
+        worker.configure(settings, true, false);
+        settings.show_temperatures = true;
+        worker.configure(settings, true, false);
+        {
+            std::lock_guard lock(worker.mutex_);
+            require(worker.settings_.show_temperatures && worker.temperature_generation_ == 3 &&
+                        worker.generation_ == 3,
+                    "Coalesced off/on keeps a temperature reset even with unchanged final state");
+            require(worker.reset_generation_ == 1 && worker.gpu_generation_ == 1 &&
+                        worker.network_generation_ == 1,
+                    "Temperature transitions cannot reset unrelated worker families");
+        }
+        settings.show_hover_info = false;
+        worker.configure(settings, true, false);
+        {
+            std::lock_guard lock(worker.mutex_);
+            require(worker.temperature_generation_ == 3,
+                    "Unrelated presentation changes preserve temperature bindings");
+        }
+        worker.stop();
+    }
 
     static void drive_visibility() {
         SessionPeaks peaks;
@@ -313,6 +345,24 @@ struct CollectorDiscoveryTests {
               &collector.gpu_memory_, &collector.gpu_shared_}) {
             source->retry_ = sentinel;
         }
+        for (const bool enabled : {false, true}) {
+            settings.show_temperatures = enabled;
+            collector.configure(settings, false, false, false, true);
+            for (auto *source :
+                 {&collector.cpu_, &collector.disk_io_, &collector.disk_idle_,
+                  &collector.gpu_engines_, &collector.gpu_memory_, &collector.gpu_shared_}) {
+                require(source->retry_ == sentinel,
+                        "Temperature switch leaves every utilization/rate counter primed");
+            }
+            now += 1s;
+            counters.received += 20;
+            collector.network(snapshot, now);
+            snapshot.gauges[4].identity = snapshot.gauges[5].identity = L"nic";
+            peaks.observe(snapshot);
+            require(snapshot.gauges[4].status == Status::valid && snapshot.gauges[4].value == 20 &&
+                        snapshot.gauges[4].session_peak == 200,
+                    "Temperature switch preserves the network baseline and session peak");
+        }
         const std::vector<CounterItem> gpu_rows{
             {L"pid_1_luid_0x00000000_0x0000000A_phys_0_eng_0_engtype_3D",
              {50, Status::valid, Unit::percent, now, 1s, {}}}};
@@ -486,7 +536,8 @@ struct CollectorDiscoveryTests {
             ++calls;
             return std::vector<std::vector<CounterItem>>{{{L"0 C:", idle}, {L"1 D:", idle}}};
         };
-        Snapshot valid;
+        const auto valid_storage = std::make_unique<Snapshot>();
+        auto &valid = *valid_storage;
         collect_disk_readings(valid, devices, now, io, active);
         peaks.observe(valid);
         continuity.observe(valid);
@@ -507,7 +558,8 @@ struct CollectorDiscoveryTests {
                 "Failed discovery retains all disk identities and exposes the native failure");
         require(collector.disk_io_.delay_ == 8 && collector.disk_idle_.delay_ == 8,
                 "An unchanged failed inventory does not rebuild disk queries");
-        Snapshot failed;
+        const auto failed_storage = std::make_unique<Snapshot>();
+        auto &failed = *failed_storage;
         collector.disk(failed, now + 30s);
         require(failed.disks.size() == 2 && failed.disks[0].read.status == Status::error &&
                     failed.disks[0].read.detail.find(L"Injected disk discovery") !=
@@ -584,4 +636,5 @@ void discovery_tests() {
     loadbar::CollectorDiscoveryTests::visibility();
     loadbar::CollectorDiscoveryTests::drive_visibility();
     loadbar::CollectorDiscoveryTests::cpu_continuity();
+    loadbar::CollectorDiscoveryTests::temperature_coalescing();
 }

@@ -1,10 +1,37 @@
 # Performance
 
-**A passive ten-minute observation of Release 1.1.0 is recorded in the
-[performance review](performance-review-1.1.0.md).** It used the existing 250 ms horizontal
-configuration; the prescribed 1 Hz performance gate remains pending. Automated test durations
-and offscreen probes do not establish production overhead. See
+**The current 1.2.0 worktree has an independent review and passive ten-minute observation in
+[the new performance review](performance-review-1.2.0.md).** At the existing 250 ms cadence,
+it measured 14.38 ms/s process CPU, median 67.31 MiB private bytes and 59.90 MiB working set.
+The report identified vendor capability retries, hover/text cache churn and small hidden-drive
+scratch retention. All three improvements are implemented with deterministic regression tests;
+the earlier live observation does not measure the resulting savings.
+
+The new **Show temperatures** switch stops temperature opens/reads and vendor probing while
+disabled, releases idle sensor resources, and excludes temperatures from paint/deadline work.
+Pending canceled requests retain their buffers until completion. Temperature text uses its
+own bounded component slots, so hover transitions reuse it. Confirmed missing vendor capability
+is remembered without retaining initialized driver libraries; transient failures remain retryable.
+
+The [1.1.0 review](performance-review-1.1.0.md) remains historical evidence, not a controlled
+comparison. Both observations used existing 250 ms horizontal configurations; the prescribed
+1 Hz performance gate remains pending. Automated test durations and offscreen probes do not
+establish production overhead. See
 [AGENTS.md](../AGENTS.md#performance-gate) for the targets and required conditions.
+
+## Temperature spacing update (1.2.0)
+
+The reference-layout update adds one cached DirectWrite text format for temperature lines.
+It is rebuilt on font-scale changes, with unchanged snapshots reusing layout, glyph and glow
+resources. Temperature values remain integer-formatted and repaint only when their displayed
+number, blended icon color, glow intensity or availability changes. Fractional changes in the
+60–95°C ramps can change icon appearance without changing the number. DirectWrite ink offsets
+are cached with each temperature text layout; fractional tint/glow updates reuse these layouts
+and the existing glow masks. Offscreen tests count resource creation to verify this reuse.
+Layout measurements and text hit bounds are
+computed on reflow, not through provider calls in paint. No collector, timer, thread or
+periodic I/O was added. Existing cache/recovery tests and the new repeated-reference renders
+passed; this is code/test evidence, not a new production-overhead measurement.
 
 ## Independent tooltip controls (1.1.5)
 
@@ -135,3 +162,35 @@ Edge-aware square fitting performs a bounded search only when layout inputs chan
 switches invalidate the existing layout key; unchanged frames reuse it. Rotated hover text
 uses drawing transforms and the existing text cache, without new timers or worker work.
 These changes have not been measured in a production performance run.
+
+## Temperature implementation (1.2.0)
+
+Temperatures reuse the sampling worker and bounded snapshot handoff. GPU bindings/capabilities
+and drive handles are cached. Queries run at most once per second, with failure backoff;
+hidden devices pause and sleeping drives skip temperature I/O. Each drive owns one 4-KiB
+request buffer, one event and one handle; pending/retiring requests are capped at 1,024.
+Last-valid temperature retention is bounded to 4,096 device/component records. These upper
+bounds are safety limits, not representative resource usage.
+
+Geist Mono adds 173,204 embedded bytes plus its notice. DirectWrite copies the font into a
+private collection once per renderer lifetime; text layouts use the existing cache. Temperature
+presence changes rebuild layout, while whole-degree/color/glow changes invalidate only the
+affected block. Sub-degree changes with identical presentation request no resting repaint.
+There is no new Loadbar-owned thread, timer, sensor history, periodic file write or network request.
+
+Fake-provider tests verify cadence, backoff, sleep/Hide and non-overlapping requests. Rendering
+tests verify cache reuse and temperature-only repaint decisions. A standard-user read-only
+probe confirmed provider availability on the host, not overhead or accuracy. Controlled
+Release CPU/private-bytes/working-set/GPU measurements, sleeping-drive power behavior,
+driver cancellation latency and the one-hour soak remain pending for 1.2.0.
+
+The ASUS reader reuses one handle, event, 16-byte input and 16-byte response. GPU vendor
+fallbacks initialize lazily, cache API tables/device/sensor bindings and stop on GPU Hide.
+A working Windows source incurs no vendor initialization. Fake API tests verify binding
+reuse, failure backoff and reference cleanup. Vendor libraries can create their own threads
+and retain driver resources; those costs are not established by the bounded application state.
+The read-only diagnostic reports first-bind duration; it does not measure steady-state overhead.
+The final Release probe measured 13.48 ms for NVIDIA binding/first read and 259.79 ms for
+Intel initialization/enumeration (which reported no sensors). These single observations were
+made during development checks, not a controlled performance run. Debug or debugger-attached
+timings are diagnostic evidence only, not Release overhead measurements.

@@ -82,6 +82,39 @@ void DisplayContinuity::memory(Metric &percent, Metric &bytes, std::uint64_t &ca
         capacity = found->second.capacity;
     }
 }
+void DisplayContinuity::temperature(TemperatureReading &reading, std::wstring_view identity,
+                                    unsigned kind) {
+    auto &metric = reading.metric;
+    metric.identity = identity;
+    metric.retained.reset();
+    if (identity.empty()) {
+        return;
+    }
+    const auto key = std::pair{identity, kind};
+    auto found = temperatures_.find(key);
+    if (metric.status == Status::valid &&
+        (metric.unit != Unit::celsius || !valid_temperature(metric.value))) {
+        metric.status = Status::error;
+        metric.detail = L"Invalid temperature observation";
+    }
+    if (metric.status == Status::valid) {
+        if (found != temperatures_.end()) {
+            if (metric.timestamp >= found->second.metric.timestamp) {
+                found->second = reading;
+            }
+        } else if (temperatures_.size() < kMaximumMemoryScopes) {
+            found = temperatures_.emplace(key, reading).first;
+        }
+        metric.retained = ObservedValue{metric.value, metric.timestamp};
+    }
+    if (found != temperatures_.end() && metric.status != Status::valid) {
+        const auto &saved = found->second;
+        metric.retained = ObservedValue{saved.metric.value, saved.metric.timestamp};
+        reading.sensor = saved.sensor;
+        reading.warning = saved.warning;
+        reading.critical = saved.critical;
+    }
+}
 void DisplayContinuity::observe(Snapshot &snapshot, const Settings &settings) {
     const auto selection = [](Selection &previous, std::map<std::wstring, Selection> &known,
                               const std::wstring &preference, std::wstring &id, std::wstring &label,
@@ -163,11 +196,15 @@ void DisplayContinuity::observe(Snapshot &snapshot, const Settings &settings) {
            L"physical-memory");
     memory(snapshot.gauges[3], snapshot.gpu_memory_bytes, snapshot.gpu_memory_capacity,
            snapshot.gpu_memory_label);
+    temperature(snapshot.cpu_temperature, L"cpu", 0);
+    temperature(snapshot.ram_temperature, L"physical-memory", 1);
+    temperature(snapshot.gpu_temperature, snapshot.gpu_id, 2);
     for (auto &disk : snapshot.disks) {
         disk.read.identity = disk.write.identity = disk.active.identity = disk.id;
         observe(disk.read, Gauge::disk_read);
         observe(disk.write, Gauge::disk_write);
         observe(disk.active, Gauge::disk_active);
+        temperature(disk.temperature, disk.id, 3);
     }
 }
 } // namespace loadbar

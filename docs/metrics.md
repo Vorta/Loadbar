@@ -216,6 +216,107 @@ Before the first valid observation, the memory bar is omitted and the GPU uses o
 Settings still exposes the raw memory failure. Integrated/linked-adapter accuracy remains a
 hardware validation item.
 
+## Temperature sources (1.2.0)
+
+CPU temperature uses the already installed ASUS ATKACPI interface, opened with zero desired
+access and overlapped I/O. The only request is IOCTL `0x0022240C`, status method `0x53545344`
+(`DSTS`), endpoint `0x00120094`, in the 16-byte packet `{method, 8, endpoint, 0}`. The parser
+requires 4–16 returned bytes, presence encoding `0x00010000`, and a 1–150°C low-word value.
+It reports **ASUS firmware-reported CPU temperature**, not a verified package/hottest-core
+scope. The same endpoint may describe Intel or AMD CPUs on compatible ASUS systems; it
+does not provide generic CPU-brand coverage. The OEM protocol is not a public Microsoft API.
+Its read-only use was explicitly reviewed against the
+[G-Helper protocol implementation](https://github.com/seerge/g-helper/blob/main/app/AsusACPI.cs)
+and probed under a standard user before implementation. Loadbar's reader is independently
+implemented; no G-Helper code/runtime is bundled. No INIT, DEVS, fan, power, or control calls
+are issued. One cached handle/event and 16-byte response remain owned through cancellation.
+Timeout cancellation starts after two seconds; a driver that fails to complete can delay
+shutdown. Failed reads/open attempts back off to 30 seconds and reset after resume/Retry.
+
+GPU temperature uses `D3DKMTOpenAdapterFromLuid` for the selected adapter and
+`D3DKMTQueryAdapterInfo` with `KMTQAITYPE_ADAPTERPERFDATA`. The main sensor is reported
+in tenths of Celsius. Physical-adapter count and thermal capabilities are cached; linked
+adapters use their hottest main sensor, with its index and matching limits in details.
+All physical-adapter queries must succeed before claiming that maximum; partial failures
+retain the previous complete observation instead of silently changing its scope.
+A failed query or a zero record with no thermal capabilities does not establish a valid
+zero temperature. Adapter changes/reset close and reopen the binding.
+[Microsoft GPU interface](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_adapter_perfdata).
+
+When that source fails, Loadbar loads only the selected GPU vendor's optional driver API:
+
+| Vendor | Source and scope |
+| --- | --- |
+| NVIDIA | NVAPI `NvAPI_GPU_GetLogicalGpuInfo` matches the selected LUID; `NvAPI_GPU_GetThermalSettings` accepts only GPU-target sensors, excluding VRAM/board/power sensors. All matching physical members must report; show the hottest main sensor. |
+| AMD | ADLX `IADLXGPU2::LUID` and distinct GPU IDs match the selected adapter. `GetCurrentGPUMetrics / GPUTemperature` supplies edge temperature, never hotspot. Matching members must equal Windows' physical-adapter count. |
+| Intel | IGCL device properties match the selected LUID and Intel vendor ID. `ctlEnumTemperatureSensors / ctlTemperatureGetState` accepts GPU-domain sensors only and labels the maximum accordingly. Linked adapters are unavailable through this fallback because physical-member coverage cannot be verified. |
+
+Missing/ambiguous identities, incomplete physical scope, invalid values and API failures
+cannot become valid readings. Enumeration is bounded (256 logical devices/sensors, 64 physical
+members, and NVIDIA's smaller API-specific limits). Interface versions and exports are checked.
+The Windows source is first on each new binding; a working source stays cached until it
+fails or settings/recovery reset it. Failure tries the alternate source, then retries with
+2/4/8/16/30-second backoff. Healthy Windows reads never initialize a vendor API. GPU Hide
+releases both bindings. No vendor history tracking, controls, helper process, or DLL download
+is used. Intel enables only the Level Zero telemetry initialization flag, not firmware-update
+functionality. Driver calls run on the worker and do not offer a guaranteed cancellable timeout.
+
+These scopes are deliberately named separately; temperatures from different sensor locations
+are not interchangeable accuracy references. See [NVIDIA thermal sensors](https://docs.nvidia.com/nvapi/group__gputhermal.html),
+[AMD adapter identity](https://gpuopen.com/manuals/adlx/adlx-sdk-references/adlx-interfaces/gpu/iadlxgpu2/),
+[AMD edge temperature](https://gpuopen.com/manuals/adlx/adlx-sdk-references/adlx-interfaces/performance-monitoring/iadlxgpumetrics/gputemperature/),
+and [Intel IGCL](https://intel.github.io/drivers.gpu.control-library/api.html).
+
+Drive temperature uses each discovered device-interface path, resolved with its stable
+instance ID, and `IOCTL_STORAGE_QUERY_PROPERTY / StorageDeviceTemperatureProperty`.
+Sensor 0 is preferred and described as composite **where reported**; otherwise the hottest
+reported sensor is used. Signed Celsius is preserved. The parser validates version, returned
+length, count, duplicate indices and the `0x8000` not-reported sentinel. The desktop-source
+sanity range is −99 to 250°C, distinct from safe operating limits. A bounded 4-KiB descriptor
+buffer accepts at most 128 sensors. Device warning/critical limits remain separate metadata.
+[Microsoft storage descriptor](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-storage_temperature_data_descriptor).
+
+Each visible drive owns one cached handle, event and asynchronous request buffer. No second
+request overlaps the first. The worker polls completion without waiting, requests cancellation
+after two seconds, and retains storage until completion. Delayed results carry the request's
+original timestamp. Failed requests back off; unsupported/power/open failures cannot create
+a per-tick retry loop. Hidden/disconnected devices cancel outstanding work. Discovery failure
+pauses disk bindings until a complete successful scan. Sleeping drives are skipped using
+`GetDevicePowerState`; temperature queries do not deliberately wake them. Storage drivers
+can still affect power transitions and cancellation latency, requiring hardware checks.
+Completed I/O or power-state failures discard the handle so an unchanged interface path
+can recover after disconnect/reconnect. Shutdown cancels and drains pending requests before
+freeing their buffers; a broken driver that never completes cancellation can delay worker join.
+
+Temperature collection is capped at one Hz, or the configured slower sample interval.
+**Show temperatures** is enabled by default. Applying it unchecked hides temperature
+readouts and thermal icon effects, stops new sensor opens/reads and vendor probing, and
+releases idle handles and request buffers. Only completion polling of already-canceled
+asynchronous requests remains until their buffers can be released safely. An executing
+synchronous driver call must return before the worker accepts new settings. No unrelated
+utilization/rate query or session peak is reset. Re-enabling restores retained values with
+their original ages while requesting fresh observations; Settings identifies disabled
+collection as paused and popup tooltips omit temperature values.
+The worker records temperature transitions independently, so an off/on pair coalesced during
+a slow collection still resets only temperature bindings when the worker resumes.
+
+Confirmed missing vendor DLLs/exports or successfully established absence of a main sensor
+are remembered for five minutes for the selected stable identity and runtime binding. The
+library and API objects are still released immediately. Transient access, initialization,
+enumeration, identity and reading errors retain normal backoff. Device changes, reset/resume
+and re-enabling clear the negative result; a time-based retry also discovers changed capability.
+
+Asynchronous completion can reduce the effective cadence. Existing last-valid continuity
+retains the temperature, sensor, limits and original age through failure, Hide, resume and
+worker Retry, keyed by stable device identity. Sensor values never contribute to rate peaks.
+The UI shows no initial temperature until a real valid observation, then retains it through
+failures; details always expose the underlying status.
+
+**CPU temperature outside compatible ASUS firmware and RAM temperature remain outside this
+provider set.** Generic ACPI zones do not reliably identify CPU package or DIMM sensors.
+Unsupported provider access leaves the readout absent and explains the limitation in details;
+it does not assert that the hardware has no sensor. Network has no temperature metric.
+
 ## Evidence and limitations
 
 Provider smoke checks demonstrated execution on the build host, including independent disks,

@@ -19,6 +19,7 @@ void run_optimization_app_tests();
 void telemetry_optimization_tests();
 void verify_resources(const wchar_t *path, const wchar_t *license);
 void discovery_tests();
+void temperature_tests();
 
 #define CHECK(expression)                                                                          \
     do {                                                                                           \
@@ -200,6 +201,7 @@ int wmain(int argc, wchar_t **argv) {
         run_optimization_app_tests();
         telemetry_optimization_tests();
         discovery_tests();
+        temperature_tests();
         std::cout << "Model tests passed\n";
         return 0;
     } catch (const std::exception &error) {

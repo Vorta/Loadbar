@@ -90,9 +90,13 @@ void set_snapshot_status(Snapshot &snapshot, Status status, std::wstring_view de
         apply(disk.read);
         apply(disk.write);
         apply(disk.active);
+        apply(disk.temperature.metric);
     }
     apply(snapshot.gpu_memory_bytes);
     apply(snapshot.ram_used_bytes);
+    apply(snapshot.cpu_temperature.metric);
+    apply(snapshot.ram_temperature.metric);
+    apply(snapshot.gpu_temperature.metric);
 }
 const wchar_t *gauge_name(Gauge gauge) noexcept {
     constexpr const wchar_t *names[]{L"RAM",        L"GPU 3D",     L"GPU decode",
@@ -123,11 +127,21 @@ void visit_metrics(SnapshotType &snapshot, Apply apply, const Settings &visibili
         apply(disk.read);
         apply(disk.write);
         apply(disk.active);
+        if (visibility.show_temperatures) {
+            apply(disk.temperature.metric);
+        }
     }
     if (visibility.gpu_visible) {
         apply(snapshot.gpu_memory_bytes);
+        if (visibility.show_temperatures) {
+            apply(snapshot.gpu_temperature.metric);
+        }
     }
     apply(snapshot.ram_used_bytes);
+    if (visibility.show_temperatures) {
+        apply(snapshot.cpu_temperature.metric);
+        apply(snapshot.ram_temperature.metric);
+    }
 }
 std::optional<Clock::time_point> after(Clock::time_point start, Clock::duration delay) noexcept {
     if (start > Clock::time_point::max() - delay) {

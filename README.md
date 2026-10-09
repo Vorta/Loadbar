@@ -31,10 +31,17 @@ Percentage meters use 0–100%. Each disk/network rate direction scales to its h
 reading since launch. Failed samples retain their last valid display; raw status and
 observation age remain available in details.
 
+Version 1.2.0 adds CPU temperature on compatible ASUS systems, plus GPU and drive
+temperatures from installed drivers, using bundled Geist Mono. Temperatures appear below
+their icons after the first valid reading. Coverage depends on the firmware and driver;
+see [temperature sources](docs/metrics.md#temperature-sources-120). RAM temperature remains unavailable.
+Uncheck **Show temperatures** in Settings to hide the readouts and stop all temperature
+collection; other readings continue normally.
+
 ## Run Loadbar
 
-**Requires Windows 11 x64.** Download **[Loadbar 1.1.5](https://github.com/Vorta/Loadbar/releases/tag/v1.1.5)**.
-See the [release notes](docs/releases/1.1.5.md) for details and validation status.
+**Requires Windows 11 x64.** Download **[Loadbar 1.2.0](https://github.com/Vorta/Loadbar/releases/tag/v1.2.0)**.
+See the [release notes](docs/releases/1.2.0.md) for details and validation status.
 
 1. Run `Loadbar.exe`. Its notification-area icon may be in the overflow menu.
 2. Click the icon for **Settings**. Choose the monitor, edge, GPU and network interface.
@@ -77,3 +84,4 @@ See [testing](docs/testing.md) for Debug, ASan and analysis commands, or
 [docs/metrics.md](docs/metrics.md).
 
 Copyright © 2026 **Vorta**. Released under the [MIT license](LICENSE).
+Bundled [Geist Mono](docs/dependencies.md) is licensed under the SIL Open Font License.

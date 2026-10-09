@@ -31,6 +31,9 @@ void verify_resources(const wchar_t *path, const wchar_t *license) {
         }
     }
     const auto manifest = FindResourceW(module.get(), MAKEINTRESOURCEW(1), RT_MANIFEST);
+    if (!FindResourceW(module.get(), MAKEINTRESOURCEW(203), RT_DIALOG)) {
+        throw std::runtime_error("Embedded license dialog missing");
+    }
     if (!manifest) {
         throw std::runtime_error("Embedded manifest missing");
     }
@@ -69,6 +72,26 @@ void verify_resources(const wchar_t *path, const wchar_t *license) {
                                       std::istreambuf_iterator<char>());
     if (source.bad() || std::string_view(data, size) != expected_notice) {
         throw std::runtime_error("Embedded notice differs from source license");
+    }
+    for (const auto &[id, filename] : {std::pair{201, L"resources/fonts/GeistMono.ttf"},
+                                       std::pair{202, L"resources/fonts/OFL.txt"},
+                                       std::pair{204, L"third_party/nvapi/NOTICE.txt"},
+                                       std::pair{205, L"third_party/adlx/LICENSE"},
+                                       std::pair{206, L"third_party/igcl/LICENSE"}}) {
+        const auto item = FindResourceW(module.get(), MAKEINTRESOURCEW(id), RT_RCDATA);
+        const auto memory = item ? LoadResource(module.get(), item) : nullptr;
+        const auto *contents = memory ? static_cast<const char *>(LockResource(memory)) : nullptr;
+        const auto length = item ? SizeofResource(module.get(), item) : 0;
+        std::ifstream file(std::filesystem::path(license).parent_path() / filename,
+                           std::ios::binary);
+        if (!file || !contents || !length) {
+            throw std::runtime_error("Embedded font or third-party notice missing");
+        }
+        const std::string expected((std::istreambuf_iterator<char>(file)),
+                                   std::istreambuf_iterator<char>());
+        if (file.bad() || std::string_view(contents, length) != expected) {
+            throw std::runtime_error("Embedded font/notice differs from source");
+        }
     }
     DWORD unused{};
     const auto bytes = GetFileVersionInfoSizeW(path, &unused);

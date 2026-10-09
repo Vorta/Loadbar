@@ -1,0 +1,14 @@
+#include <windows.h>
+201 RCDATA "fonts/GeistMono.ttf"
+202 RCDATA "fonts/OFL.txt"
+204 RCDATA "../third_party/nvapi/NOTICE.txt"
+205 RCDATA "../third_party/adlx/LICENSE"
+206 RCDATA "../third_party/igcl/LICENSE"
+203 DIALOGEX 0, 0, 420, 270
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Loadbar licenses"
+FONT 9, "Segoe UI"
+BEGIN
+    EDITTEXT 3000, 8, 8, 404, 232, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON "Close", IDOK, 357, 248, 55, 14
+END

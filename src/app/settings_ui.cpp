@@ -98,6 +98,8 @@ void Application::create_settings() {
         }
         child(settings_content_, instance_, L"BUTTON", L"Display CPU usage always as s&quares",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kCpuSquares);
+        child(settings_content_, instance_, L"BUTTON", L"Show t&emperatures",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kTemperatures);
         child(settings_content_, instance_, L"BUTTON", L"Show info on &hover",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kHoverInfo);
         child(settings_content_, instance_, L"BUTTON", L"Show toolti&ps",
@@ -173,6 +175,8 @@ void Application::populate_settings() {
     SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(settings_.alignment), 0);
     CheckDlgButton(settings_content_, kCpuSquares,
                    settings_.cpu_squares ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(settings_content_, kTemperatures,
+                   settings_.show_temperatures ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kTooltips,
                    settings_.show_tooltips ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kHoverInfo,
@@ -493,7 +497,8 @@ void Application::layout_settings() {
         }
         position(field(settings_content_, static_cast<int>(i)), bounds);
     }
-    constexpr std::array preference_ids{kCpuSquares, kHoverInfo, kTooltips, kTaskManagerClick};
+    constexpr std::array preference_ids{kCpuSquares, kTemperatures, kHoverInfo, kTooltips,
+                                        kTaskManagerClick};
     for (std::size_t i = 0; i < preference_ids.size(); ++i) {
         position(GetDlgItem(settings_content_, preference_ids[i]), layout.preferences[i]);
     }
@@ -563,6 +568,7 @@ SettingsDraft Application::settings_draft() const {
     }
     draft.hidden_disks = draft_hidden_disks_;
     draft.cpu_squares = IsDlgButtonChecked(settings_content_, kCpuSquares) == BST_CHECKED;
+    draft.show_temperatures = IsDlgButtonChecked(settings_content_, kTemperatures) == BST_CHECKED;
     draft.show_hover_info = IsDlgButtonChecked(settings_content_, kHoverInfo) == BST_CHECKED;
     draft.show_tooltips = IsDlgButtonChecked(settings_content_, kTooltips) == BST_CHECKED;
     draft.open_task_manager_on_click =
@@ -731,13 +737,26 @@ void Application::update_details() {
         return; // Initial WM_SIZE can precede creation of the Settings child controls.
     }
     std::vector<std::wstring> keys, values;
-    const auto rows = snapshot_.processors.size() + kGaugeCount +
-                      3 * std::max(std::size_t{1}, snapshot_.disks.size());
+    const auto rows = snapshot_.processors.size() + kGaugeCount + 3 +
+                      4 * std::max(std::size_t{1}, snapshot_.disks.size());
     values.reserve(rows);
     if (detail_structure_changed_) {
         keys.reserve(rows);
     }
     const auto now = Clock::now();
+    const auto add_temperature = [&](std::wstring_view label, const TemperatureReading &reading) {
+        if (detail_structure_changed_) {
+            keys.emplace_back(label);
+        }
+        values.push_back(settings_.show_temperatures
+                             ? temperature_details(reading, now, settings_.interval_ms)
+                             : L"Disabled — sampling paused");
+    };
+    add_temperature(L"CPU temperature", snapshot_.cpu_temperature);
+    add_temperature(L"RAM temperature", snapshot_.ram_temperature);
+    if (settings_.gpu_visible) {
+        add_temperature(L"GPU temperature", snapshot_.gpu_temperature);
+    }
     for (const auto &cpu : snapshot_.processors) {
         const auto metric = aged_metric(cpu.utilization, now, settings_.interval_ms);
         if (detail_structure_changed_) {
@@ -802,6 +821,7 @@ void Application::update_details() {
                 L"{} — {}; {}{}", metric_text(metric), status_text(metric.status), metric.detail,
                 is_rate_gauge(direction) ? L"; " + peak_text(metric) : L""));
         }
+        add_temperature(disk.label + L" · Temperature", disk.temperature);
     }
 
     if (catalog_ && !catalog_->detail.empty()) {

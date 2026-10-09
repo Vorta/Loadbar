@@ -15,7 +15,7 @@ struct ActivityState {
     }
 };
 enum class Status : std::uint8_t { valid, warming_up, stale, unavailable, error };
-enum class Unit : std::uint8_t { percent, bytes_per_second, bytes };
+enum class Unit : std::uint8_t { percent, bytes_per_second, bytes, celsius };
 struct ObservedValue {
     double value{};
     Clock::time_point timestamp{};

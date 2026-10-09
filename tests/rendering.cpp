@@ -1,4 +1,5 @@
 #include "model/continuity.hpp"
+#include "model/geometry.hpp"
 #include "ui/renderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -894,7 +895,7 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
     require(small_ink > 0 && large_ink >= small_ink * 3 / 2,
             "Hover font ink grows along with the larger widget");
     // Reuse one target and existing fonts, then fail each replacement font in turn.
-    for (unsigned stage = 0; stage < 4; ++stage) {
+    for (unsigned stage = 0; stage < 5; ++stage) {
         bool armed = false;
         Renderer retry([&](Renderer::ResourceKind kind, unsigned index) {
             return armed && kind == Renderer::ResourceKind::font && index == stage ? E_OUTOFMEMORY
@@ -930,6 +931,559 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
     }
     std::cout << artifact << " scaling fixtures passed\n";
 }
+void temperature_reference_previews(IWICImagingFactory *wic, ID2D1Factory *factory,
+                                    const std::filesystem::path &directory) {
+    using namespace loadbar;
+    constexpr std::array normal_load{44., 80., 35., 66., 58., 22., 68., 29., 10., 34., 5., 22.,
+                                     46., 11., 5.,  29., 12., 7.,  39., 13., 4.,  26., 8., 29.};
+    constexpr std::array<std::array<double, 5>, 3> temperatures{
+        {{64, 46, 58, 49, 38}, {95, 72, 87, 74, 58}, {99, 77, 92, 79, 61}}};
+    constexpr std::array<const wchar_t *, 3> modes{L"normal", L"hot", L"critical"};
+    Settings settings;
+    settings.cpu_squares = true;
+    settings.show_hover_info = false;
+    for (unsigned mode = 0; mode < modes.size(); ++mode) {
+        auto snapshot = fixture();
+        for (std::size_t i = 0; i < snapshot.processors.size(); ++i) {
+            snapshot.processors[i].utilization.value = mode == 0 ? normal_load[i]
+                                                       : mode == 1
+                                                           ? 86 + static_cast<double>(i % 5) * 3
+                                                           : 100;
+        }
+        const double ram_percent = mode == 0 ? 63 : mode == 1 ? 88 : 93;
+        set_physical_memory(snapshot, 64ULL * 1073741824,
+                            static_cast<std::uint64_t>(64 * 1073741824.0 * (1 - ram_percent / 100)),
+                            {});
+        snapshot.gauges[1].value = mode == 0 ? 71 : 98;
+        snapshot.gauges[2].value = mode == 0 ? 14 : 0;
+        snapshot.gauges[3].value = mode == 0 ? 48 : mode == 1 ? 86 : 94;
+        snapshot.gpu_memory_bytes.value =
+            snapshot.gauges[3].value * static_cast<double>(snapshot.gpu_memory_capacity) / 100;
+        snapshot.disks[0].active.value = mode == 0 ? 38 : mode == 1 ? 92 : 96;
+        snapshot.disks[1].active.value = mode == 0 ? 7 : mode == 1 ? 64 : 40;
+        const auto rate = [](Metric &metric, double fraction) {
+            metric.session_peak = 100e6;
+            metric.value = fraction * *metric.session_peak;
+        };
+        rate(snapshot.disks[0].read, mode == 0 ? .56 : mode == 1 ? .80 : .50);
+        rate(snapshot.disks[0].write, mode == 0 ? .12 : mode == 1 ? .62 : .88);
+        rate(snapshot.disks[1].read, mode == 0 ? .06 : mode == 1 ? .51 : .55);
+        rate(snapshot.disks[1].write, mode == 0 ? .12 : mode == 1 ? .22 : .12);
+        rate(snapshot.gauges[4], mode == 0 ? .46 : mode == 1 ? .20 : .12);
+        rate(snapshot.gauges[5], mode == 0 ? .18 : mode == 1 ? .09 : .06);
+        std::array readings{&snapshot.cpu_temperature, &snapshot.ram_temperature,
+                            &snapshot.gpu_temperature, &snapshot.disks[0].temperature,
+                            &snapshot.disks[1].temperature};
+        for (std::size_t i = 0; i < readings.size(); ++i) {
+            readings[i]->metric = {temperatures[mode][i], Status::valid, Unit::celsius};
+            readings[i]->sensor = L"Synthetic design comparison only";
+        }
+        for (auto edge : {Edge::top, Edge::left, Edge::right}) {
+            for (unsigned length : {1200U, 1400U}) {
+                if (!horizontal(edge) && length == 1200) {
+                    continue;
+                }
+                for (unsigned density : {1U, 2U}) {
+                    const UINT width = (horizontal(edge) ? length : 60) * density;
+                    const UINT height = (horizontal(edge) ? 60 : length) * density;
+                    Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+                    checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                              WICBitmapCacheOnLoad, &bitmap));
+                    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+                    const float dpi = 96 * static_cast<float>(density);
+                    checked(factory->CreateWicBitmapRenderTarget(
+                        bitmap.Get(),
+                        D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                                                     D2D1::PixelFormat(), dpi, dpi),
+                        &target));
+                    Renderer renderer;
+                    checked(renderer.render_to(target.Get(), snapshot, settings, edge, false, 1,
+                                               false, false, {}));
+                    const auto actual = pixels(bitmap.Get(), width, height);
+                    const auto revision = renderer.layout_revision();
+                    checked(renderer.render_to(target.Get(), snapshot, settings, edge, false, 1,
+                                               false, false, {}));
+                    require(renderer.layout_revision() == revision &&
+                                pixels(bitmap.Get(), width, height) == actual,
+                            "Reference rendering is stable and reuses its layout");
+                    const auto *orientation = edge == Edge::top    ? L"top"
+                                              : edge == Edge::left ? L"left"
+                                                                   : L"right";
+                    save(wic, bitmap.Get(),
+                         directory / std::format(L"temperature-reference-{}-{}x{}-{}x-{}.png",
+                                                 orientation, width / density, height / density,
+                                                 density, modes[mode]));
+                }
+            }
+        }
+    }
+}
+void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                              const std::filesystem::path &directory) {
+    using namespace loadbar;
+    Microsoft::WRL::ComPtr<IDWriteFactory> write;
+    checked(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                reinterpret_cast<IUnknown **>(write.GetAddressOf())));
+    EmbeddedFont font;
+    checked(font.initialize(write.Get()));
+    UINT32 family_index{};
+    BOOL exists{};
+    checked(font.collection()->FindFamilyName(L"Geist Mono", &family_index, &exists));
+    require(exists != FALSE, "Bundled font collection contains Geist Mono");
+    Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+    checked(font.collection()->GetFontFamily(family_index, &family));
+    for (auto weight : {DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_MEDIUM}) {
+        Microsoft::WRL::ComPtr<IDWriteFont> match;
+        checked(family->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH_NORMAL,
+                                             DWRITE_FONT_STYLE_NORMAL, &match));
+        require(match->GetWeight() == weight &&
+                    match->GetSimulations() == DWRITE_FONT_SIMULATIONS_NONE,
+                "Bundled variable font supplies real Regular and Medium weights");
+    }
+    for (float size : {9.0F, 11.0F, 22.0F}) {
+        Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
+        checked(write->CreateTextFormat(L"Geist Mono", font.collection(), DWRITE_FONT_WEIGHT_MEDIUM,
+                                        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size,
+                                        L"", &format));
+        checked(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+        checked(format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
+        for (const std::wstring value : {L"64°C", L"100°C", L"250°C", L"-99°C"}) {
+            Microsoft::WRL::ComPtr<IDWriteTextLayout> text;
+            checked(write->CreateTextLayout(value.data(), static_cast<UINT32>(value.size()),
+                                            format.Get(), 3.1F * size, 14 * size / 11, &text));
+            DWRITE_TEXT_METRICS metrics{};
+            DWRITE_OVERHANG_METRICS overhang{};
+            checked(text->GetMetrics(&metrics));
+            checked(text->GetOverhangMetrics(&overhang));
+            require(
+                metrics.width <= 3.1F * size && metrics.lineCount == 1 && overhang.left <= 0 &&
+                    overhang.right <= 0 && overhang.top <= 0 && overhang.bottom <= 0,
+                std::format(
+                    "Temperature glyph bounds: size {}, width {}, height {}, overhang {}/{}/{}/{}",
+                    size, metrics.width, metrics.height, overhang.left, overhang.top,
+                    overhang.right, overhang.bottom)
+                    .c_str());
+        }
+    }
+    for (auto edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
+        for (bool squares : {false, true}) {
+            for (float text_scale : {1.0F, 1.5F, 2.25F}) {
+                for (float requested : {40.0F, 60.0F, 120.0F}) {
+                    auto snapshot = fixture();
+                    for (auto *t : {&snapshot.cpu_temperature, &snapshot.ram_temperature,
+                                    &snapshot.gpu_temperature, &snapshot.disks[0].temperature,
+                                    &snapshot.disks[1].temperature}) {
+                        t->metric = {100, Status::valid, Unit::celsius};
+                    }
+                    Settings settings;
+                    settings.cpu_squares = squares;
+                    const float thickness = std::max(
+                        requested,
+                        static_cast<float>(minimum_thickness(1400, 640, edge, snapshot.processors,
+                                                             text_scale, settings, 2)));
+                    auto layout = make_snapshot_layout(horizontal(edge) ? 1400 : thickness,
+                                                       horizontal(edge) ? thickness : 1400, edge,
+                                                       snapshot, text_scale, settings);
+                    require(layout.fits, "Thermal glyph test uses a readable layout");
+                    Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
+                    checked(write->CreateTextFormat(
+                        L"Geist Mono", font.collection(), DWRITE_FONT_WEIGHT_MEDIUM,
+                        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                        layout.temperature_font_size, L"", &format));
+                    checked(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+                    checked(format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
+                    for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+                        auto snapped = layout;
+                        snap_layout(snapped, dpi);
+                        for (const auto &b : snapped.blocks) {
+                            if (b.temperature.width == 0) {
+                                continue;
+                            }
+                            for (const std::wstring value :
+                                 {L"64°C", L"100°C", L"250°C", L"-99°C"}) {
+                                Microsoft::WRL::ComPtr<IDWriteTextLayout> text;
+                                checked(write->CreateTextLayout(
+                                    value.data(), static_cast<UINT32>(value.size()), format.Get(),
+                                    b.temperature.width, b.temperature.height, &text));
+                                DWRITE_OVERHANG_METRICS ink{};
+                                checked(text->GetOverhangMetrics(&ink));
+                                const float y =
+                                    b.temperature.y - (horizontal(edge) ? ink.bottom : 0);
+                                const float bottom = y + b.temperature.height + ink.bottom;
+                                require(y - ink.top >= b.icon.y + b.icon.height &&
+                                            y - ink.top >= b.temperature.y - .001F &&
+                                            bottom <=
+                                                b.temperature.y + b.temperature.height + .001F,
+                                        "Actual temperature ink clears the icon and stays in "
+                                        "hit/paint bounds");
+                                if (horizontal(edge)) {
+                                    require(std::abs(bottom - b.graphic.y - b.graphic.height) <
+                                                .001F,
+                                            "Actual temperature ink ends at the snapped graphic "
+                                            "bottom");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        const bool horizontal = edge == Edge::top || edge == Edge::bottom;
+        const UINT width = horizontal ? 1400 : 60, height = horizontal ? 60 : 1400;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        Renderer reused;
+        auto current = fixture();
+        const auto base = current;
+        const auto assign = [](TemperatureReading &reading, double value) {
+            reading.metric = {value, Status::valid, Unit::celsius};
+            reading.sensor = L"Synthetic render fixture";
+        };
+        std::vector<BYTE> original, normal;
+        for (unsigned mode = 0; mode < 6; ++mode) {
+            current = base;
+            if (mode >= 1 && mode <= 4) {
+                assign(current.gpu_temperature, mode == 2 ? 92 : 58);
+                assign(current.disks[0].temperature, mode == 2 ? 79 : 49);
+                if (mode != 3) {
+                    assign(current.cpu_temperature, mode == 2 ? 99 : 64);
+                    assign(current.ram_temperature, mode == 2 ? 77 : 46);
+                    assign(current.disks[1].temperature, mode == 2 ? 61 : 38);
+                }
+                if (mode == 4) {
+                    for (auto *t : {&current.cpu_temperature, &current.ram_temperature,
+                                    &current.gpu_temperature, &current.disks[0].temperature,
+                                    &current.disks[1].temperature}) {
+                        t->metric.retained = ObservedValue{t->metric.value, {}};
+                        t->metric.status = Status::error;
+                        t->metric.value = 0;
+                    }
+                }
+            }
+            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            const auto actual = pixels(bitmap.Get(), width, height);
+            if (mode == 0) {
+                original = actual;
+            }
+            if (mode == 1) {
+                normal = actual;
+                require(actual != original, "Temperature appears without hover");
+            }
+            if (mode == 4) {
+                require(actual == normal, "Retained temperature renders identically");
+            }
+            if (mode == 5) {
+                require(actual == original, "New sensor identity restores original icons");
+            }
+            const auto revision = reused.layout_revision();
+            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            require(revision == reused.layout_revision(), "Temperature layout is cached");
+            Renderer fresh;
+            checked(fresh.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            require(actual == pixels(bitmap.Get(), width, height),
+                    "Temperature transition equals fresh rendering");
+            const wchar_t *names[]{L"unavailable", L"normal",   L"critical",
+                                   L"mixed",       L"retained", L"reset"};
+            const wchar_t *edges[]{L"automatic", L"left", L"top", L"right", L"bottom"};
+            save(wic, bitmap.Get(),
+                 directory / std::format(L"temperature-{}-60-{}.png",
+                                         edges[static_cast<unsigned>(edge)], names[mode]));
+        }
+        assign(current.gpu_temperature, 87);
+        for (bool hover : {false, true}) {
+            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, hover, true, {}));
+            save(wic, bitmap.Get(),
+                 directory / std::format(L"temperature-contrast-{}-{}.png",
+                                         static_cast<unsigned>(edge), hover));
+        }
+        assign(current.gpu_temperature, 58.5);
+        checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+        const auto rounded = pixels(bitmap.Get(), width, height);
+        assign(current.gpu_temperature, 58.51);
+        checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+        require(rounded == pixels(bitmap.Get(), width, height),
+                "Outside tint/glow ramps, integer formatting agrees with repaint rounding");
+        for (float text_scale : {1.0F, 1.5F, 2.0F}) {
+            for (float dpi : {96.0F, 144.0F, 192.0F}) {
+                Microsoft::WRL::ComPtr<IWICBitmap> scaled_bitmap;
+                const auto scale = dpi / 96;
+                const UINT scaled_width =
+                    static_cast<UINT>((horizontal ? 1400.0F : 200.0F) * scale);
+                const UINT scaled_height =
+                    static_cast<UINT>((horizontal ? 200.0F : 1400.0F) * scale);
+                checked(wic->CreateBitmap(scaled_width, scaled_height,
+                                          GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad,
+                                          &scaled_bitmap));
+                Microsoft::WRL::ComPtr<ID2D1RenderTarget> scaled_target;
+                checked(factory->CreateWicBitmapRenderTarget(
+                    scaled_bitmap.Get(),
+                    D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                                                 D2D1::PixelFormat(), dpi, dpi),
+                    &scaled_target));
+                checked(reused.render_to(scaled_target.Get(), current, {}, edge, false, text_scale,
+                                         false, false, {}));
+                Renderer fresh;
+                const auto actual = pixels(scaled_bitmap.Get(), scaled_width, scaled_height);
+                checked(fresh.render_to(scaled_target.Get(), current, {}, edge, false, text_scale,
+                                        false, false, {}));
+                require(actual == pixels(scaled_bitmap.Get(), scaled_width, scaled_height),
+                        "Temperature DPI/text-scale transition equals fresh rendering");
+            }
+        }
+    }
+}
+void temperature_ramp_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                                   const std::filesystem::path &directory) {
+    using namespace loadbar;
+    constexpr UINT width = 2800, height = 120;
+    Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+    checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad,
+                              &bitmap));
+    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+    checked(factory->CreateWicBitmapRenderTarget(
+        bitmap.Get(),
+        D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(), 192,
+                                     192),
+        &target));
+    auto snapshot = fixture();
+    Settings settings;
+    settings.cpu_squares = true;
+    for (auto &p : snapshot.processors) {
+        p.utilization.value = 40;
+    }
+    for (auto &g : snapshot.gauges) {
+        g.value = 40;
+    }
+    unsigned creations{}, text_creations{};
+    Renderer renderer([&](Renderer::ResourceKind kind, unsigned) {
+        creations += kind == Renderer::ResourceKind::glow;
+        text_creations += kind == Renderer::ResourceKind::text;
+        return S_OK;
+    });
+    const auto render = [&](double value, bool contrast = false) {
+        for (auto *t :
+             {&snapshot.cpu_temperature, &snapshot.ram_temperature, &snapshot.gpu_temperature,
+              &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
+            t->metric = {value, Status::valid, Unit::celsius};
+        }
+        checked(renderer.render_to(target.Get(), snapshot, settings, Edge::top, false, 1, false,
+                                   contrast, {}));
+        return pixels(bitmap.Get(), width, height);
+    };
+    const auto icon_pixels = [&](const std::vector<BYTE> &image, Box box) {
+        std::vector<BYTE> result;
+        for (unsigned y = static_cast<unsigned>(box.y * 2);
+             y < static_cast<unsigned>((box.y + box.height) * 2); ++y) {
+            const auto start =
+                (static_cast<std::size_t>(y) * width + static_cast<unsigned>(box.x * 2)) * 4;
+            const auto count = static_cast<std::size_t>(box.width * 2) * 4;
+            result.insert(result.end(), image.begin() + static_cast<std::ptrdiff_t>(start),
+                          image.begin() + static_cast<std::ptrdiff_t>(start + count));
+        }
+        return result;
+    };
+    auto cold = render(59);
+    auto edge = render(60);
+    auto layout = make_snapshot_layout(1400, 60, Edge::top, snapshot, 1, settings);
+    snap_layout(layout, 192);
+    for (const auto &b : layout.blocks) {
+        require(icon_pixels(cold, b.icon) == icon_pixels(edge, b.icon),
+                "All icons retain their original color through 60 C despite number band changes");
+    }
+    require(creations == 0, "Cool temperatures create no glow resources");
+    for (double value : {60.0, 75.0, 90.0, 92.5, 95.0}) {
+        const auto actual = render(value);
+        save(wic, bitmap.Get(),
+             directory / std::format(L"temperature-ramp-top-1400x60-2x-{:.1f}C.png", value));
+        Renderer fresh;
+        checked(fresh.render_to(target.Get(), snapshot, settings, Edge::top, false, 1, false, false,
+                                {}));
+        require(actual == pixels(bitmap.Get(), width, height),
+                "Thermal ramp transitions equal fresh production rendering");
+        if (value == 90) {
+            require(creations == 0, "Glow begins above 90 C, not at its zero-strength endpoint");
+        }
+    }
+    const auto built = creations;
+    require(built > 0, "Hot thermal icons construct a glow mask");
+    const auto tinted = render(80);
+    const auto tint_texts = text_creations;
+    const auto more_tinted = render(80.4);
+    require(tint_texts == text_creations, "Fractional tint updates reuse cached text measurements");
+    const auto glowing = render(92);
+    const auto glow_texts = text_creations;
+    const auto more_glowing = render(92.4);
+    require(glow_texts == text_creations, "Fractional glow updates reuse cached text measurements");
+    for (const auto &b : layout.blocks) {
+        if (b.kind == 4) {
+            require(icon_pixels(tinted, b.icon) == icon_pixels(more_glowing, b.icon),
+                    "Network does not acquire thermal tint or glow");
+            continue;
+        }
+        require(icon_pixels(tinted, b.icon) != icon_pixels(more_tinted, b.icon),
+                "CPU, RAM, GPU and drive icons show fractional tint changes");
+        require(icon_pixels(glowing, b.icon) != icon_pixels(more_glowing, b.icon),
+                "CPU, RAM, GPU and drive icons show fractional glow changes");
+    }
+    require(creations == built, "Varying thermal color/intensity reuses cached glow masks");
+    const auto contrast = render(90, true);
+    require(contrast == render(90.4, true),
+            "High contrast ignores thermal effects when the number is unchanged");
+}
+void temperature_invalidation_tests() {
+    using namespace loadbar;
+    struct HiddenWindow {
+        HWND value = CreateWindowExW(0, L"STATIC", L"Loadbar.TemperatureTest", WS_POPUP, 0, 0, 1400,
+                                     60, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ~HiddenWindow() {
+            if (value) {
+                DestroyWindow(value);
+            }
+        }
+    } window;
+    require(window.value != nullptr, "Hidden redraw test window created");
+    Renderer renderer;
+    auto before = fixture();
+    before.gpu_temperature.metric = {58, Status::valid, Unit::celsius, Clock::now()};
+    checked(renderer.paint(window.value, before, {}, Edge::top, false, 1));
+    const auto invalidates = [&](double temperature) {
+        auto after = before;
+        after.gpu_temperature.metric.value = temperature;
+        return renderer.invalidate_changes(window.value, before, after, {});
+    };
+    require(!invalidates(58.1), "Sub-degree change avoids a resting repaint");
+    require(invalidates(58.5), "Temperature-only integer change repaints");
+    before.gpu_temperature.metric.value = 64.9;
+    require(invalidates(65.0), "Temperature band change repaints at the same displayed integer");
+    before.gpu_temperature.metric.value = 89.9;
+    require(invalidates(90.0), "Final tint threshold change repaints");
+    for (double value : {60.0, 75.0, 89.0, 90.0, 92.0, 94.0}) {
+        before.gpu_temperature.metric.value = value;
+        require(invalidates(value + .1), "Sub-degree tint/glow changes repaint the same integer");
+        require(!invalidates(value), "Identical thermal appearance avoids repaint");
+    }
+    before.gpu_temperature.metric.value = 95.0;
+    require(!invalidates(95.1), "Saturated glow avoids a repaint for an unchanged integer");
+    auto absent = before;
+    absent.gpu_temperature = {};
+    require(renderer.invalidate_changes(window.value, before, absent, {}),
+            "Temperature removal rebuilds layout");
+    Settings disabled;
+    disabled.show_temperatures = false;
+    require(renderer.invalidate_changes(window.value, before, before, disabled),
+            "Disabling temperatures requests a layout repaint");
+    checked(renderer.paint(window.value, before, disabled, Edge::top, false, 1));
+    const auto revision = renderer.layout_revision();
+    for (auto *snapshot : {&before, &absent}) {
+        require(!renderer.invalidate_changes(window.value, before, *snapshot, disabled),
+                "Disabled temperature presence or absence never requests a repaint");
+        snapshot->cpu_temperature.metric = {97, Status::valid, Unit::celsius, Clock::now()};
+        snapshot->gpu_temperature.metric = {97, Status::valid, Unit::celsius, Clock::now()};
+        require(!renderer.invalidate_changes(window.value, before, *snapshot, disabled),
+                "Disabled temperature values never request a repaint");
+        checked(renderer.paint(window.value, *snapshot, disabled, Edge::top, false, 1));
+        require(renderer.layout_revision() == revision,
+                "Disabled temperature-only changes preserve cached layout");
+    }
+    require(renderer.invalidate_changes(window.value, before, before, {}),
+            "Re-enabling retained temperatures requests a layout repaint");
+}
+void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
+    using namespace loadbar;
+    const auto absent = fixture();
+    auto snapshot = absent;
+    for (auto *reading :
+         {&snapshot.cpu_temperature, &snapshot.ram_temperature, &snapshot.gpu_temperature,
+          &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
+        reading->metric = {95, Status::valid, Unit::celsius};
+    }
+    Settings disabled;
+    disabled.show_temperatures = false;
+    for (Edge edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
+        const UINT width = horizontal(edge) ? 1400 : 60;
+        const UINT height = horizontal(edge) ? 60 : 1400;
+        Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+        checked(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                  WICBitmapCacheOnLoad, &bitmap));
+        Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+        checked(factory->CreateWicBitmapRenderTarget(
+            bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
+        unsigned temperature_layouts{}, all_layouts{};
+        bool reject_temperature{};
+        Renderer renderer([&](Renderer::ResourceKind kind, unsigned index) {
+            all_layouts += kind == Renderer::ResourceKind::text;
+            temperature_layouts += kind == Renderer::ResourceKind::text && index == 4;
+            return reject_temperature && kind == Renderer::ResourceKind::text && index == 4
+                       ? E_OUTOFMEMORY
+                       : S_OK;
+        });
+        for (bool contrast : {false, true}) {
+            checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, false, contrast,
+                                       {}));
+            const auto temperature_count = temperature_layouts;
+            require(temperature_count >= 5, "All five temperature slots were exercised");
+            bool hover_warmed{};
+            for (bool hover : {true, false, true, false}) {
+                const auto count = all_layouts;
+                checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, hover,
+                                           contrast, {}));
+                require(temperature_layouts == temperature_count,
+                        "Hover transitions reuse every unchanged temperature text layout");
+                if (hover_warmed) {
+                    require(all_layouts == count,
+                            "Rest and hover reuse both independent text caches after warmup");
+                }
+                hover_warmed = true;
+                const auto enabled = pixels(bitmap.Get(), width, height);
+                Renderer fresh;
+                checked(fresh.render_to(target.Get(), snapshot, {}, edge, false, 1, hover, contrast,
+                                        {}));
+                require(enabled == pixels(bitmap.Get(), width, height),
+                        "Dedicated temperature cache preserves enabled pixels");
+            }
+            for (bool hover : {false, true}) {
+                const auto count = temperature_layouts;
+                checked(renderer.render_to(target.Get(), snapshot, disabled, edge, false, 1, hover,
+                                           contrast, {}));
+                const auto hidden = pixels(bitmap.Get(), width, height);
+                Renderer original;
+                checked(original.render_to(target.Get(), absent, {}, edge, false, 1, hover,
+                                           contrast, {}));
+                require(hidden == pixels(bitmap.Get(), width, height) &&
+                            temperature_layouts == count,
+                        "Disabled temperatures match sensor-free rendering without thermal text, "
+                        "tint or glow on every edge and hover/contrast mode");
+                const auto revision = renderer.layout_revision();
+                checked(renderer.render_to(target.Get(), absent, disabled, edge, false, 1, hover,
+                                           contrast, {}));
+                require(renderer.layout_revision() == revision &&
+                            hidden == pixels(bitmap.Get(), width, height),
+                        "Disabled retained values do not affect pixels or layout caching");
+            }
+        }
+        reject_temperature = true;
+        require(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, false, false, {}) ==
+                    E_OUTOFMEMORY,
+                "Temperature text creation failure reaches resource recovery");
+        reject_temperature = false;
+        checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        const auto recovered = pixels(bitmap.Get(), width, height);
+        Renderer fresh;
+        checked(fresh.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        require(recovered == pixels(bitmap.Get(), width, height),
+                "Temperature cache recovers completely after failed layout creation");
+        const auto count = temperature_layouts;
+        renderer.preferences_changed();
+        checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        require(temperature_layouts == count + 5 &&
+                    recovered == pixels(bitmap.Get(), width, height),
+                "Font preference invalidation rebuilds all temperature slots without visual drift");
+    }
+}
 } // namespace
 int wmain(int argc, wchar_t **argv) {
     try {
@@ -942,6 +1496,11 @@ int wmain(int argc, wchar_t **argv) {
         checked(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.GetAddressOf()));
         const std::filesystem::path directory(argv[1]);
         std::filesystem::create_directories(directory);
+        temperature_render_tests(wic.Get(), factory.Get(), directory);
+        temperature_ramp_render_tests(wic.Get(), factory.Get(), directory);
+        temperature_reference_previews(wic.Get(), factory.Get(), directory);
+        temperature_invalidation_tests();
+        temperature_visibility_cache_tests(wic.Get(), factory.Get());
         vertical_edge_render_tests(wic.Get(), factory.Get(), directory);
         preference_render_tests(wic.Get(), factory.Get(), directory);
         uniform_visibility_render_tests(wic.Get(), factory.Get(), directory);
@@ -1125,7 +1684,7 @@ int wmain(int argc, wchar_t **argv) {
                                       loadbar::Renderer::ResourceKind::glow}) {
                         for (unsigned failure_index = 0;
                              failure_index < (kind == loadbar::Renderer::ResourceKind::icon   ? 5U
-                                              : kind == loadbar::Renderer::ResourceKind::font ? 4U
+                                              : kind == loadbar::Renderer::ResourceKind::font ? 5U
                                                                                               : 1U);
                              ++failure_index) {
                             bool failed = false;

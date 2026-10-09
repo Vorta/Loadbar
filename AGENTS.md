@@ -78,13 +78,14 @@ Centralize these defaults; do not promote them into additional user requirements
 | Sampling | 1,000 ms; validate a configurable range of 250–5,000 ms. |
 | Placement | Bottom on portrait; right on landscape. Allow explicit selection of any edge. |
 | Thickness | Default 40 DIPs; validate whole-number input from 40–640 DIPs, increasing to the readable minimum for topology/orientation/text scale; DIPs are the only sizing unit; migrate saved percentage sizes. |
-| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings, with graphics-only rest. |
+| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings; temperatures are the only always-visible numbers. |
 | Disk mode | Active time with smaller read/write throughput bars. Keep IOPS feasible without implementing it speculatively. |
 | Rate units | Inline/Settings use B/s, KiB/s, MiB/s, GiB/s. Popup tooltips use one-decimal MB/GB (MB/s or GB/s for rates), explicitly Windows-style binary units; tiny positive values below 0.1 MB use <0.1, while zero stays zero. |
 | Controls | Notification-area menu for selection, placement, settings, and exit; no autohide by default. |
 | Startup | No launch-at-sign-in registration unless explicitly requested. |
 | Interaction | Show info on hover, Show tooltips and Open Task Manager on click are checked by default. Show info on hover controls inline numbers; Show tooltips independently controls the bar popup. Settings readings and the tray tooltip remain available. Older settings migrate the tooltip choice from hover info. |
 | CPU shape | Display CPU usage always as squares is unchecked by default; checked mode retains P/E class sizes with 14/6-DIP square sides. |
+| Temperatures | Show temperatures is checked by default, including migrated settings. Unchecking hides temperature values/effects and pauses all temperature collection independently of hover/tooltips. |
 
 Never sum physical disks or silently select only one for display. Remember explicitly hidden disks
 by stable identity; new identities are shown automatically. Prefer a non-software GPU with the largest reported
@@ -137,8 +138,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 ```
 
 Use native Win32 windows/controls, Direct2D drawing, and DirectWrite text. Embed the
-manifest, icon, version resources, defaults, and required notices. Use installed Windows
-fonts. Declare `asInvoker` and Per-Monitor V2 awareness in the manifest. [DPI][dpi]
+manifest, icon, version resources, defaults, and required notices. Embed Geist Mono for bar
+text and its OFL notice; native controls retain installed Windows fonts. Declare `asInvoker`
+and Per-Monitor V2 awareness in the manifest. [DPI][dpi]
 
 Default to no third-party runtime dependencies. Before adding a source/static dependency,
 record its necessity, exact version/commit, integrity, license obligations, and overhead.
@@ -192,7 +194,8 @@ counter paths below as candidates requiring runtime verification, not guaranteed
 Attach identity, unit, monotonic timestamp/interval, and status to each metric. Distinguish
 **valid, warming-up, stale, unavailable, and error**. Define staleness centrally. For every
 metric, keep displaying its last valid observation through subsequent failures, staleness,
-and warm-up; before any valid observation, display warm-up as zero without status marks.
+and warm-up; before any valid observation, display warm-up as zero without status marks,
+except temperature readouts, which remain absent until first observed.
 Never-observed error/unavailable metrics keep an unavailable/error presentation. Preserve raw
 statuses and original observation age in details, and never feed display fallbacks into rates
 or peaks. Keep retention bounded, scoped by device/metric, and in memory only; isolate failures by provider.
@@ -291,6 +294,42 @@ Persist a resolvable interface identity; do not rely on transient indices. Exclu
 from automatic selection. Do not combine physical, VPN, tunnel, and virtual-switch traffic
 by default. Link speed is metadata, never an end-to-end capacity claim or the rate display scale.
 
+### Temperatures
+
+Keep standalone standard-user operation. Version 1.2.0 reads compatible ASUS firmware CPU
+temperature through the reviewed read-only ATKACPI status request. Read the selected GPU's
+temperature through Windows graphics APIs, with optional NVIDIA NVAPI, AMD ADLX and Intel
+IGCL fallbacks from installed display drivers. Match vendor GPU readings by adapter LUID;
+identify NVAPI core, ADLX edge and IGCL GPU-domain maximum scopes in details. Read each visible physical drive's
+device/composite temperature through the Windows storage temperature property. Prefer
+sensor 0 for storage, otherwise the hottest reported sensor; identify the scope honestly.
+Use the hottest main sensor across a selected linked GPU's physical adapters. Do not mix
+adapters, use a GPU hotspot as a main sensor, or present an ACPI zone as CPU/RAM temperature.
+CPU temperature outside compatible ASUS firmware and RAM temperature are outside this
+version's standalone provider coverage; expose that limitation without declaring the hardware
+unsupported. Do not bundle vendor DLLs or install drivers; retain vendor header/binding
+licenses and embed their notices. Never issue hardware-control requests.
+
+Read temperatures no faster than once per second and no faster than the configured cadence.
+Pause hidden components and all temperature sources when Show temperatures is unchecked;
+avoid querying sleeping drives. Cancel pending asynchronous reads without freeing their buffers
+before completion, release idle sensor resources, and do not restart unrelated counters.
+Retained temperatures must not cause painting or age-timer work while disabled. Keep one
+last-valid observation
+with its sensor scope and original age, per stable device, in memory only. Before any valid
+temperature, preserve the original icon scale/position with no placeholder or reserved space.
+After the first valid reading, move the icon upward to show a whole-number Celsius readout
+below it, upright on every edge and independent of hover settings. Network has no temperature.
+
+Use fixed visual warm/hot/critical thresholds in Celsius: CPU 70/80/90, RAM 55/65/75,
+GPU 65/75/85, drives 50/60/70. Normal/warm/hot/critical text uses
+`#9AA4B2`/`#F2B840`/`#FF623A`/`#FF3456`. CPU/RAM/GPU/drive icons retain their own colors through
+60°C, then blend in sRGB toward their current temperature-number color with fraction
+`clamp((C - 60) / 30, 0, 1)`. At 90°C and above they use the final red tone. All four gain
+a static glow whose intensity rises linearly from zero at 90°C to maximum at 95°C.
+Device-reported warning/critical limits are separate diagnostic metadata, not these visual
+thresholds. High contrast uses system colors without thermal blending or glow.
+
 ## Visualization and execution model
 
 - Make solid logical-processor tiles the CPU visualization: more utilization means stronger color.
@@ -309,7 +348,8 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
   when it no longer fits; reflow for changes to edge length,
   orientation, topology, devices or Windows text scale. Keep equal non-CPU graphic widths and separate
   automatic magnification from DPI/text scaling. Native controls retain Windows sizing.
-- Numbers appear on hover only. GPU uses Device violet; network keeps the 2:1 (14/6-DIP
+- Utilization/capacity/rate numbers appear on hover only; temperatures follow the policy above.
+  GPU uses Device violet; network keeps the 2:1 (14/6-DIP
   reference) split. Disk hues are active `#65C55B`, read `#B9DF9B`, write `#36884D`, with
   existing tone treatment and high-contrast overrides. These are fixed presentation choices.
 - Use fixed 0–100% scales for percentages. Scale each disk read/write and network upload/download

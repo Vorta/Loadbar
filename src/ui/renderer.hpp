@@ -2,6 +2,7 @@
 #include "model/layout.hpp"
 #include "model/presentation.hpp"
 #include "platform/windows.hpp"
+#include "ui/embedded_font.hpp"
 #include <d2d1.h>
 #include <dwrite.h>
 #include <functional>
@@ -24,7 +25,8 @@ class Renderer {
                       Clock::time_point now);
     void discard() noexcept;
     void preferences_changed() noexcept;
-    void invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
+    // Returns whether a paint was requested, even when an invisible HWND discards its region.
+    bool invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
                             const Settings &settings) const;
     [[nodiscard]] std::wstring tooltip(float x, float y, const Snapshot &snapshot,
                                        const Settings &settings) const;
@@ -37,7 +39,8 @@ class Renderer {
     ResourceProbe resource_probe_;
     SystemColorReader system_colors_;
     [[nodiscard]] Color system_color(int index) const;
-    HRESULT prepare(ID2D1RenderTarget *target, float text_scale, bool high_contrast);
+    HRESULT prepare(ID2D1RenderTarget *target, float content_scale, float temperature_size,
+                    bool high_contrast);
     void draw_icon(std::size_t index, Box bounds, Color color);
     void meter(Box bounds, Status status, double fraction, Color hue, Color track, float radius);
     void glow(Box bounds, Color hue, float radius, float alpha);
@@ -51,7 +54,10 @@ class Renderer {
         float width{}, height{};
         unsigned font{};
         Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+        float temperature_x{}, temperature_bottom_adjustment{};
     };
+    IDWriteTextLayout *text_layout(TextCache &cache, const std::wstring &text, float width,
+                                   float height, unsigned font);
     struct GlowCache {
         float width{}, height{}, radius{}, dpi{}, content_scale{}, extent_width{}, extent_height{};
         Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
@@ -63,14 +69,17 @@ class Renderer {
         bool glow{};
     };
     Microsoft::WRL::ComPtr<ID2D1Factory> factory_;
+    EmbeddedFont embedded_font_;
     Microsoft::WRL::ComPtr<IDWriteFactory> write_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> target_;
     Microsoft::WRL::ComPtr<ID2D1RenderTarget> drawing_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush_;
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle> stroke_;
     std::array<Microsoft::WRL::ComPtr<ID2D1Geometry>, 5> icons_;
-    std::array<Microsoft::WRL::ComPtr<IDWriteTextFormat>, 4> fonts_;
+    std::array<Microsoft::WRL::ComPtr<IDWriteTextFormat>, 5> fonts_;
     std::vector<TextCache> text_cache_;
+    // Temperature slots follow component blocks, independently of optional hover text.
+    std::vector<TextCache> temperature_cache_;
     std::vector<GlowCache> glows_;
     std::vector<Reading> core_readings_;
     std::vector<std::array<Reading, 3>> block_readings_;
@@ -78,13 +87,16 @@ class Renderer {
     Layout layout_;
     std::vector<std::pair<std::wstring, bool>> layout_disks_;
     bool disk_layout_changed(const Snapshot &snapshot, const Settings &settings) const;
+    bool temperature_layout_changed(const Snapshot &snapshot, bool enabled) const;
     std::vector<std::tuple<unsigned, ProcessorId, bool, std::optional<unsigned>>> topology_;
     float layout_width_{}, layout_height_{}, layout_scale_{}, layout_dpi_{};
     Edge layout_edge_{Edge::automatic};
     bool layout_gpu_visible_{true}, layout_network_visible_{true};
     bool layout_cpu_squares_{}, layout_gpu_memory_{};
+    bool layout_show_temperatures_{true};
     Alignment layout_alignment_{};
     float content_scale_{};
+    float temperature_size_{};
     bool high_contrast_{};
     std::optional<bool> system_high_contrast_;
     std::uint64_t layout_revision_{};

@@ -200,6 +200,7 @@ Result<Device> disk_device(HDEVINFO devices, SP_DEVICE_INTERFACE_DATA &interface
     device.kind = DeviceKind::disk;
     device.id = identity.data();
     device.runtime_id = number.DeviceNumber;
+    device.device_path = detail->DevicePath;
     device.label = std::format(L"Disk {} — {}", number.DeviceNumber,
                                label[0] ? label.data() : L"Storage device");
     return device;
@@ -297,6 +298,7 @@ std::vector<Device> gpus() {
         device.kind = DeviceKind::gpu;
         device.label = info.Description;
         device.runtime_id = luid_value(info.AdapterLuid);
+        device.vendor_id = info.VendorId;
         device.capacity = info.DedicatedVideoMemory;
         device.shared_capacity = info.SharedSystemMemory;
         DISPLAYCONFIG_ADAPTER_NAME name{{DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME}};

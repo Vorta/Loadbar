@@ -68,7 +68,7 @@ std::vector<loadbar::Processor> hybrid_processors() {
 void run_placement_tests() {
     using namespace loadbar;
     const auto processors = hybrid_processors();
-    const auto full_minimum = minimum_thickness(600, 300, loadbar::Edge::top, processors, 1, {}, 2);
+    const auto full_minimum = minimum_thickness(640, 300, loadbar::Edge::top, processors, 1, {}, 2);
     const auto short_minimum =
         minimum_thickness(560, 300, loadbar::Edge::top, processors, 1, {}, 2);
     require(short_minimum > full_minimum,
@@ -82,10 +82,10 @@ void run_placement_tests() {
             const bool along_x = horizontal(edge);
             Monitor monitor{L"monitor",
                             L"Test monitor",
-                            {-px(600), -px(1200), along_x ? 0 : px(600), along_x ? 0 : -px(600)},
+                            {-px(640), -px(1200), along_x ? 0 : px(560), along_x ? 0 : -px(560)},
                             dpi,
                             true};
-            // Horizontal monitor is 600x1200 DIPs; vertical is 1200x600.
+            // Horizontal monitor is 640x1200 DIPs; vertical is 1200x640.
             Settings settings;
             settings.edge = edge;
             const auto saved = settings;

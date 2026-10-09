@@ -1,5 +1,6 @@
 #include "ui/renderer.hpp"
 #include "model/geometry.hpp"
+#include "model/strip_style.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -132,13 +133,25 @@ Geometry icon_geometry(ID2D1Factory *factory, unsigned icon) {
     return result;
 }
 } // namespace
+bool Renderer::temperature_layout_changed(const Snapshot &snapshot, bool enabled) const {
+    if (layout_show_temperatures_ != enabled) {
+        return true;
+    }
+    if (!enabled) {
+        return false;
+    }
+    return std::ranges::any_of(layout_.blocks, [&](const auto &block) {
+        const auto *reading = block_temperature(block, snapshot);
+        return (block.temperature.width > 0) != (reading && temperature_visible(*reading));
+    });
+}
 bool Renderer::disk_layout_changed(const Snapshot &snapshot, const Settings &settings) const {
     return !std::ranges::equal(
         snapshot.disks, layout_disks_, [&](const auto &disk, const auto &cached) {
             return disk.id == cached.first && disk_visible(disk.id, settings) == cached.second;
         });
 }
-void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
+bool Renderer::invalidate_changes(HWND window, const Snapshot &previous, const Snapshot &next,
                                   const Settings &settings) const {
     const bool topology_changed = !std::ranges::equal(
         previous.processors, next.processors, [](const Processor &a, const Processor &b) {
@@ -146,6 +159,7 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
                    a.efficiency_class == b.efficiency_class;
         });
     if (!target_ || !layout_.fits || topology_changed || disk_layout_changed(next, settings) ||
+        temperature_layout_changed(next, settings.show_temperatures) ||
         layout_cpu_squares_ != settings.cpu_squares ||
         layout_gpu_memory_ != gpu_memory_visible(next) ||
         layout_gpu_visible_ != settings.gpu_visible ||
@@ -158,7 +172,7 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
                                   previous.gpu_memory_label != next.gpu_memory_label)) ||
         (settings.network_visible && previous.network_label != next.network_label)) {
         InvalidateRect(window, nullptr, FALSE);
-        return;
+        return true;
     }
     std::vector<bool> changed(layout_.blocks.size());
     const auto now = Clock::now();
@@ -181,12 +195,24 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
     changed[1] = changed[1] || previous.ram_total_bytes != next.ram_total_bytes ||
                  differs(previous.ram_used_bytes, next.ram_used_bytes);
     for (std::size_t b = 0; b < layout_.blocks.size(); ++b) {
+        const auto *before = block_temperature(layout_.blocks[b], previous);
+        const auto *after = block_temperature(layout_.blocks[b], next);
+        if (settings.show_temperatures && before && after && temperature_visible(*after)) {
+            const auto a = presented_metric(before->metric);
+            const auto z = presented_metric(after->metric);
+            changed[b] =
+                changed[b] || !temperature_visible(*before) ||
+                std::round(a.value) != std::round(z.value) ||
+                (!high_contrast_ && temperature_appearance(layout_.blocks[b].kind, a.value) !=
+                                        temperature_appearance(layout_.blocks[b].kind, z.value));
+        }
         if (layout_.blocks[b].kind == 2) {
             changed[b] = changed[b] || differs(previous.gpu_memory_bytes, next.gpu_memory_bytes) ||
                          previous.gpu_memory_capacity != next.gpu_memory_capacity;
         }
     }
     const float dpi_scale = static_cast<float>(GetDpiForWindow(window)) / 96;
+    bool invalidated{};
     // Include the whole dependent overlay and three-sigma glow; Windows coalesces these regions.
     for (std::size_t block = 0; block < changed.size(); ++block) {
         if (!changed[block]) {
@@ -199,7 +225,9 @@ void Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
                          static_cast<LONG>(std::ceil((b.x + b.width) * dpi_scale)),
                          static_cast<LONG>(std::ceil((b.y + b.height) * dpi_scale))};
         InvalidateRect(window, &dirty, FALSE);
+        invalidated = true;
     }
+    return invalidated;
 }
 Color Renderer::system_color(int index) const {
     const auto v = system_colors_ ? system_colors_(index) : GetSysColor(index);
@@ -212,6 +240,7 @@ void Renderer::preferences_changed() noexcept {
         f.Reset();
     }
     text_cache_.clear();
+    temperature_cache_.clear();
 }
 void Renderer::discard() noexcept {
     ++layout_revision_;
@@ -220,7 +249,8 @@ void Renderer::discard() noexcept {
     target_.Reset();
     glows_.clear();
 }
-HRESULT Renderer::prepare(ID2D1RenderTarget *target, float scale, bool contrast) {
+HRESULT Renderer::prepare(ID2D1RenderTarget *target, float scale, float temperature_size,
+                          bool contrast) {
     if (!factory_) {
         target->GetFactory(&factory_);
     }
@@ -253,29 +283,27 @@ HRESULT Renderer::prepare(ID2D1RenderTarget *target, float scale, bool contrast)
         icons_ = std::move(icons);
         stroke_ = std::move(stroke);
     }
-    if (!fonts_[0] || content_scale_ != scale) {
+    if (!fonts_[0] || content_scale_ != scale || temperature_size_ != temperature_size) {
         decltype(fonts_) fonts;
-        Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
-        checked(write_->GetSystemFontCollection(&collection));
-        UINT32 index{};
-        BOOL exists{};
-        checked(collection->FindFamilyName(L"Consolas", &index, &exists));
-        const wchar_t *family = exists ? L"Consolas" : L"Cascadia Mono";
-        constexpr std::array sizes{11.0F, 9.0F, 10.0F, 9.0F};
+        checked(embedded_font_.initialize(write_.Get()));
+        const wchar_t *family = L"Geist Mono";
+        const std::array sizes{11 * scale, 9 * scale, 10 * scale, 9 * scale, temperature_size};
         for (std::size_t i = 0; i < fonts_.size(); ++i) {
             if (resource_probe_) {
                 checked(resource_probe_(ResourceKind::font, static_cast<unsigned>(i)));
             }
             checked(write_->CreateTextFormat(
-                family, nullptr, i == 1 ? DWRITE_FONT_WEIGHT_NORMAL : DWRITE_FONT_WEIGHT_MEDIUM,
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, sizes[i] * scale, L"",
-                &fonts[i]));
+                family, embedded_font_.collection(),
+                i == 1 ? DWRITE_FONT_WEIGHT_NORMAL : DWRITE_FONT_WEIGHT_MEDIUM,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, sizes[i], L"", &fonts[i]));
             checked(fonts[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
             checked(fonts[i]->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
         }
         fonts_ = std::move(fonts);
         text_cache_.clear();
+        temperature_cache_.clear();
         content_scale_ = scale;
+        temperature_size_ = temperature_size;
     }
     high_contrast_ = contrast;
     background_ = contrast ? system_color(COLOR_WINDOW) : kBackground;
@@ -482,14 +510,29 @@ IDWriteTextLayout *Renderer::text_layout(const std::wstring &text, float width, 
     if (cursor_ >= text_cache_.size()) {
         text_cache_.emplace_back();
     }
-    auto &c = text_cache_[cursor_++];
+    return text_layout(text_cache_[cursor_++], text, width, height, font);
+}
+IDWriteTextLayout *Renderer::text_layout(TextCache &c, const std::wstring &text, float width,
+                                         float height, unsigned font) {
     if (!c.layout || c.text != text || c.width != width || c.height != height || c.font != font) {
         c = {text, width, height, font, {}};
         if (resource_probe_) {
             checked(resource_probe_(ResourceKind::text, font));
         }
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
         checked(write_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
-                                         fonts_[font].Get(), width, height, &c.layout));
+                                         fonts_[font].Get(), width, height, &layout));
+        if (font == 4) {
+            DWRITE_TEXT_METRICS metrics{};
+            DWRITE_OVERHANG_METRICS overhang{};
+            checked(layout->GetMetrics(&metrics));
+            checked(layout->GetOverhangMetrics(&overhang));
+            c.temperature_x = (width - metrics.width) / 2;
+            // Negative overhang is whitespace inside the layout box. Translate
+            // by its inverse to put the visible glyph bottom on the box bottom.
+            c.temperature_bottom_adjustment = -overhang.bottom;
+        }
+        c.layout = std::move(layout);
     }
     return c.layout.Get();
 }
@@ -625,6 +668,7 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                 return std::tie(p.core, p.id, p.mapped, p.efficiency_class) == cached;
             });
         if (disk_layout_changed(snapshot, settings) || topology_changed ||
+            temperature_layout_changed(snapshot, settings.show_temperatures) ||
             size.width != layout_width_ || size.height != layout_height_ ||
             scale != layout_scale_ || current_dpi != layout_dpi_ || edge != layout_edge_ ||
             settings.alignment != layout_alignment_ ||
@@ -655,11 +699,14 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             layout_cpu_squares_ = settings.cpu_squares;
             layout_gpu_memory_ = gpu_memory_visible(snapshot);
             layout_network_visible_ = settings.network_visible;
+            layout_show_temperatures_ = settings.show_temperatures;
             glows_.clear();
             text_cache_.clear();
+            temperature_cache_.clear();
             ++layout_revision_;
         }
-        checked(prepare(target, layout_.fits ? layout_.content_scale : scale, high_contrast));
+        checked(prepare(target, layout_.fits ? layout_.content_scale : scale,
+                        layout_.temperature_font_size, high_contrast));
         cursor_ = 0;
         target->BeginDraw();
         begun = true;
@@ -672,12 +719,19 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
         } else {
             core_readings_.resize(layout_.cores.size());
             block_readings_.resize(layout_.blocks.size());
+            if (settings.show_temperatures) {
+                temperature_cache_.resize(layout_.blocks.size());
+            }
             for (std::size_t index = 0; index < layout_.cores.size(); ++index) {
                 const auto &core = layout_.cores[index];
                 const auto m = core_metric(core, snapshot, now, settings.interval_ms);
                 core_readings_[index] = {m.value, 0, m.status, false};
                 if (m.status == Status::valid && m.value > 85) {
-                    glow(core.label, heat_color(m.value), 1.5F, 0.60F);
+                    glow(core.label, heat_color(m.value),
+                         strip_style::core_radius(core.label.width, core.label.height,
+                                                  content_scale_) /
+                             content_scale_,
+                         0.60F);
                 }
             }
             for (std::size_t index = 0; index < layout_.blocks.size(); ++index) {
@@ -713,8 +767,9 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                 } else if (m.status == Status::valid) {
                     color = heat_color(m.value);
                 }
-                const auto shape = D2D1::RoundedRect(rectangle(core.label), 1.5F * content_scale_,
-                                                     1.5F * content_scale_);
+                const float radius =
+                    strip_style::core_radius(core.label.width, core.label.height, content_scale_);
+                const auto shape = D2D1::RoundedRect(rectangle(core.label), radius, radius);
                 brush_->SetColor(native(color));
                 target->FillRoundedRectangle(shape, brush_.Get());
                 if (high_contrast_) {
@@ -734,8 +789,6 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                     status_mark(core.label, m.status);
                 }
             }
-            constexpr std::array colors{kCpuIcon, rgb(0x8EB6DC), rgb(0xB1AADB), rgb(0x96BD96),
-                                        rgb(0xD79FAF)};
             for (std::size_t index = 0; index < layout_.blocks.size(); ++index) {
                 const auto &block = layout_.blocks[index];
                 bool valid = false;
@@ -763,7 +816,29 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                                           : 2.0F);
                     valid = valid || m.status == Status::valid;
                 }
-                auto color = high_contrast_ ? foreground_ : colors[block.kind];
+                auto color = high_contrast_ ? foreground_ : component_icon_color(block.kind);
+                const auto *temperature = block_temperature(block, snapshot);
+                const bool show_temperature =
+                    settings.show_temperatures && temperature && block.temperature.width > 0;
+                if (show_temperature) {
+                    const auto value = presented_metric(temperature->metric).value;
+                    const auto appearance = temperature_appearance(block.kind, value);
+                    const auto hue = high_contrast_ ? foreground_ : appearance.text;
+                    color = high_contrast_ ? foreground_ : appearance.icon;
+                    if (!high_contrast_ && appearance.glow_alpha > 0) {
+                        glow(block.icon, hue, 3, appearance.glow_alpha);
+                    }
+                    const auto &box = block.temperature;
+                    const auto rounded = std::round(value);
+                    auto &cached = temperature_cache_[index];
+                    auto *text =
+                        text_layout(cached, std::format(L"{:.0f}°C", rounded == 0 ? 0.0 : rounded),
+                                    box.width, box.height, 4);
+                    const float y = box.y + (horizontal ? cached.temperature_bottom_adjustment : 0);
+                    brush_->SetColor(native(hue));
+                    target->DrawTextLayout({box.x + cached.temperature_x, y}, text, brush_.Get());
+                    valid = true;
+                }
                 if (!valid) {
                     color.a = 0.4F;
                 }
@@ -862,7 +937,7 @@ std::size_t Renderer::tooltip_target(float x, float y) const noexcept {
         }
     }
     for (std::size_t i = 0; i < layout_.blocks.size(); ++i) {
-        if (layout_.blocks[i].kind != 0 && contains(layout_.blocks[i].bounds)) {
+        if (contains(layout_.blocks[i].bounds)) {
             return layout_.cores.size() + i + 1;
         }
     }

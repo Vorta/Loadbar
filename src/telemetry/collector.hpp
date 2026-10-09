@@ -5,6 +5,7 @@
 #include "telemetry/discovery.hpp"
 #include "telemetry/network.hpp"
 #include "telemetry/pdh.hpp"
+#include "telemetry/temperature.hpp"
 
 #include <condition_variable>
 #include <functional>
@@ -94,7 +95,7 @@ class Collector {
     Collector(SessionPeaks &peaks, DiskInventory &disks, CpuSamples &processors,
               Discover discover = {});
     void configure(const Settings &settings, bool reset = true, bool reset_gpu = false,
-                   bool reset_network = false);
+                   bool reset_network = false, bool reset_temperatures = false);
     Snapshot sample(Clock::time_point now);
     const Catalog &catalog() const noexcept {
         return catalog_;
@@ -114,6 +115,7 @@ class Collector {
     HiddenDiskIds hidden_disks_;
     CounterSource cpu_, disk_io_, disk_idle_, gpu_engines_, gpu_memory_, gpu_shared_;
     NetworkProvider network_provider_;
+    TemperatureProviders temperatures_;
     void cpu(Snapshot &snapshot, Clock::time_point now);
     void disk(Snapshot &snapshot, Clock::time_point now);
     void network(Snapshot &snapshot, Clock::time_point now);
@@ -154,7 +156,8 @@ class SamplingWorker {
   public:
     SamplingWorker(HWND target, UINT message, Latest<Delivery> &destination, SessionPeaks &peaks,
                    DisplayContinuity &continuity, DiskInventory &disks, CpuSamples &processors,
-                   Settings settings, std::uint64_t generation = 1, std::uint64_t worker_id = 1);
+                   Settings settings, std::uint64_t generation = 1, std::uint64_t worker_id = 1,
+                   bool initially_paused = false);
     ~SamplingWorker();
     SamplingWorker(const SamplingWorker &) = delete;
     SamplingWorker &operator=(const SamplingWorker &) = delete;
@@ -162,6 +165,7 @@ class SamplingWorker {
     void stop();
 
   private:
+    friend struct CollectorDiscoveryTests;
     void run(const std::stop_token &token) noexcept;
     HWND target_;
     UINT message_;
@@ -175,6 +179,7 @@ class SamplingWorker {
     Settings settings_;
     bool paused_{};
     std::uint64_t generation_{1}, reset_generation_{1}, gpu_generation_{1}, network_generation_{1};
+    std::uint64_t temperature_generation_{1};
     const std::uint64_t worker_id_;
     std::jthread thread_;
 };

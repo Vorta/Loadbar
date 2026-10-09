@@ -118,6 +118,173 @@ void visibility_layout_tests() {
         "Hidden metrics neither arm freshness deadlines nor trigger expiry repaint");
 }
 
+void temperature_appearance_tests() {
+    using namespace loadbar;
+    for (unsigned component = 0; component < 4; ++component) {
+        const auto own = component_icon_color(component);
+        for (double value : {-99.0, 55.0, 59.9, 60.0}) {
+            const auto appearance = temperature_appearance(component, value);
+            require(appearance.icon == own && appearance.glow_alpha == 0,
+                    "Every thermal icon keeps its own color through 60 C");
+        }
+        const auto middle = temperature_appearance(component, 75);
+        require(near(middle.icon.r, (own.r + middle.text.r) / 2) &&
+                    near(middle.icon.g, (own.g + middle.text.g) / 2) &&
+                    near(middle.icon.b, (own.b + middle.text.b) / 2) && middle.glow_alpha == 0,
+                "75 C is an equal blend with the component's current number color");
+        require(temperature_appearance(component, 60.1).icon != own,
+                "Fractional temperatures enter the blend immediately above 60 C");
+        for (double value : {90.0, 90.1, 92.5, 95.0, 100.0}) {
+            const auto appearance = temperature_appearance(component, value);
+            require(appearance.icon == rgb(0xFF3456) && appearance.icon == appearance.text,
+                    "All components reach final red at 90 C and keep it");
+        }
+        require(temperature_appearance(component, 90).glow_alpha == 0 &&
+                    temperature_appearance(component, 90.1).glow_alpha > 0 &&
+                    near(temperature_appearance(component, 92.5).glow_alpha, .275F) &&
+                    near(temperature_appearance(component, 95).glow_alpha, .55F) &&
+                    temperature_appearance(component, 95) == temperature_appearance(component, 100),
+                "All thermal icons ramp glow from zero at 90 C to full strength at 95 C");
+        require(temperature_appearance(component, std::numeric_limits<double>::quiet_NaN()).icon ==
+                    own,
+                "Invalid temperatures cannot tint icons");
+    }
+    require(temperature_appearance(4, 100).icon == component_icon_color(4) &&
+                temperature_appearance(4, 100).glow_alpha == 0,
+            "Network never acquires a thermal appearance");
+}
+void temperature_reference_layout_tests() {
+    using namespace loadbar;
+    Snapshot snapshot;
+    for (unsigned i = 0; i < 24; ++i) {
+        snapshot.processors.push_back({{0, i}, i, true, {}, i < 8 ? 1U : 0U});
+    }
+    snapshot.disks = {{L"a", L"A"}, {L"b", L"B"}};
+    for (auto *reading :
+         {&snapshot.cpu_temperature, &snapshot.ram_temperature, &snapshot.gpu_temperature,
+          &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
+        reading->metric = {64, Status::valid, Unit::celsius};
+    }
+    Settings settings;
+    settings.cpu_squares = true;
+    const auto reference = make_snapshot_layout(1200, 60, Edge::top, snapshot, 1, settings);
+    require(reference.fits && reference.cores.size() == 24 && reference.blocks.size() == 6,
+            "Reference export has eight P and sixteen E logical-processor squares");
+    require(near(reference.content_scale, 1.5F) && near(reference.temperature_font_size, 11),
+            "60-DIP export uses an 11-DIP temperature font");
+    constexpr std::array graphic_x{58.0F, 322.0F, 506.0F, 690.0F, 874.0F, 1058.0F};
+    for (std::size_t i = 0; i < reference.blocks.size(); ++i) {
+        const auto &b = reference.blocks[i];
+        require(near(b.graphic.x, graphic_x[i]) && near(b.graphic.y, 13.5F) &&
+                    near(b.graphic.height, 33) && near(b.graphic.width, i == 0 ? 189.0F : 126.0F),
+                "Graphics match the measured reference positions and widths");
+        require(near(b.icon.width, 18) && near(b.icon.height, 18) &&
+                    near(b.icon.x + 9, b.graphic.x - 26) && near(b.icon.y, i == 5 ? 21.0F : 13.0F),
+                "Reference uses centered 18-DIP icons and a 42-DIP header");
+        if (i != 5) {
+            require(near(b.temperature.y, 34) && near(b.temperature.height, 12.5F) &&
+                        near(b.temperature.x + b.temperature.width / 2, b.icon.x + 9),
+                    "Temperature line is centered under its icon and ends at the graphic bottom");
+        }
+    }
+    require(
+        near(reference.blocks.front().icon.x - 7, 16) &&
+            near(reference.blocks.back().graphic.x + reference.blocks.back().graphic.width, 1184) &&
+            near(reference.divider.x, 263) && near(reference.divider.y, 15) &&
+            near(reference.divider.width, 1) && near(reference.divider.height, 30),
+        "Reference has 16-DIP margins and a centered 1-by-30-DIP divider");
+    for (auto edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
+        for (float text_scale : {1.0F, 1.5F, 2.25F}) {
+            for (float requested : {40.0F, 60.0F, 120.0F}) {
+                const float minimum = static_cast<float>(minimum_thickness(
+                    1400, 640, edge, snapshot.processors, text_scale, settings, 2));
+                const float thickness = std::max(requested, minimum);
+                const float width = horizontal(edge) ? 1400 : thickness;
+                const float height = horizontal(edge) ? thickness : 1400;
+                const auto layout =
+                    make_snapshot_layout(width, height, edge, snapshot, text_scale, settings);
+                require(layout.fits && layout.temperature_font_size >= 9 * text_scale,
+                        "Temperature text respects the readable minimum and Windows text scale");
+                for (std::size_t i = 0; i < layout.blocks.size(); ++i) {
+                    const auto &b = layout.blocks[i];
+                    if (b.temperature.width == 0) {
+                        continue;
+                    }
+                    require(b.temperature.width >= 3 * layout.temperature_font_size &&
+                                b.temperature.y >= b.icon.y + b.icon.height && b.bounds.x >= 0 &&
+                                b.bounds.y >= 0 && b.bounds.x + b.bounds.width <= width + .002F &&
+                                b.bounds.y + b.bounds.height <= height + .002F,
+                            "Five-glyph temperatures have room and remain inside the client");
+                    require(horizontal(edge) ? b.temperature.x + b.temperature.width < b.graphic.x
+                                             : b.icon.y > b.graphic.y + b.graphic.height,
+                            "Icon/readout groups never overlap their graphics");
+                    if (horizontal(edge)) {
+                        require(near(b.temperature.y + b.temperature.height,
+                                     b.graphic.y + b.graphic.height),
+                                "Horizontal temperature anchor is the graphic bottom");
+                        for (float dpi : {96.0F, 120.0F, 144.0F, 192.0F}) {
+                            auto snapped = layout;
+                            snap_layout(snapped, dpi);
+                            const auto &s = snapped.blocks[i];
+                            require(near(s.temperature.y + s.temperature.height,
+                                         s.graphic.y + s.graphic.height),
+                                    "Pixel snapping preserves the shared bottom edge");
+                        }
+                    }
+                    if (!horizontal(edge) && i + 1 < layout.blocks.size()) {
+                        require(b.temperature.y + b.temperature.height <
+                                    layout.blocks[i + 1].graphic.y,
+                                "Vertical temperature line clears the next device graphic");
+                    }
+                }
+            }
+        }
+    }
+}
+void temperature_visibility_layout_tests() {
+    using namespace loadbar;
+    Snapshot snapshot;
+    snapshot.processors.push_back({{0, 0}, 0, true, {}, 0});
+    snapshot.disks = {{L"disk", L"Fixture disk"}};
+    for (auto *reading : {&snapshot.cpu_temperature, &snapshot.ram_temperature,
+                          &snapshot.gpu_temperature, &snapshot.disks[0].temperature}) {
+        reading->metric = {95, Status::valid, Unit::celsius};
+    }
+    const auto same_box = [](Box a, Box b) {
+        return near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) &&
+               near(a.height, b.height);
+    };
+    Settings disabled;
+    disabled.show_temperatures = false;
+    for (Edge edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
+        const float width = horizontal(edge) ? 1400.0F : 60.0F;
+        const float height = horizontal(edge) ? 60.0F : 1400.0F;
+        const auto hidden = make_snapshot_layout(width, height, edge, snapshot, 1, disabled);
+        auto absent = snapshot;
+        absent.cpu_temperature = absent.ram_temperature = absent.gpu_temperature = {};
+        absent.disks[0].temperature = {};
+        const auto original = make_snapshot_layout(width, height, edge, absent, 1, {});
+        require(hidden.fits && hidden.blocks.size() == original.blocks.size(),
+                "Temperature visibility does not affect widget allocation");
+        for (std::size_t index = 0; index < hidden.blocks.size(); ++index) {
+            const auto &block = hidden.blocks[index];
+            const auto &base = original.blocks[index];
+            require(same_box(block.bounds, base.bounds) && same_box(block.icon, base.icon) &&
+                        same_box(block.graphic, base.graphic) && block.temperature.width == 0,
+                    "Disabled temperatures restore original icon bounds without reserved space");
+            require(metric_tooltip(hidden, block.icon.x + block.icon.width / 2,
+                                   block.icon.y + block.icon.height / 2, snapshot, disabled, {})
+                            .find(L"Temperature:") == std::wstring::npos,
+                    "Disabled component temperatures are absent from popup tooltips");
+        }
+        const auto core = hidden.cores.front().label;
+        require(metric_tooltip(hidden, core.x + 1, core.y + 1, snapshot, {}, {})
+                            .find(L"Temperature:") != std::wstring::npos &&
+                    metric_tooltip(hidden, core.x + 1, core.y + 1, snapshot, disabled, {})
+                            .find(L"Temperature:") == std::wstring::npos,
+                "CPU tile tooltips honor the temperature preference independently of readings");
+    }
+}
 void content_width_tests() {
     using namespace loadbar;
     std::vector<Processor> processors;
@@ -149,10 +316,11 @@ void content_width_tests() {
             require(layout.fits &&
                         near(last_core.x + last_core.width, cpu.graphic.x + cpu.graphic.width),
                     "CPU allocation ends at its last tile without a blank slot");
-            require(near(ram.bounds.x - cpu.bounds.x - cpu.bounds.width, 25 * layout.content_scale),
+            require(near(ram.bounds.x - cpu.bounds.x - cpu.bounds.width, 22 * layout.content_scale),
                     "Only normal spacing and divider separate CPU and RAM");
-            require(near(last.bounds.x + last.bounds.width, 1400 - 11 * layout.content_scale),
-                    "Remaining devices fill the edge through its normal outer margin");
+            require(
+                near(last.bounds.x + last.bounds.width, 1400 - (16 / 1.5F) * layout.content_scale),
+                "Remaining devices fill the edge through its normal outer margin");
         }
     }
     float previous{};
@@ -177,7 +345,7 @@ void scaling_tests() {
         const auto layout = make_layout(3840, height, loadbar::Edge::top, hybrid, 1, {}, 2);
         const float scale = height / 40;
         require(layout.fits && near(layout.content_scale, scale) &&
-                    near(layout.blocks[0].icon.height, 14 * scale) &&
+                    near(layout.blocks[0].icon.height, (18 / 1.5F) * scale) &&
                     near(layout.blocks[1].graphic.height, 22 * scale) &&
                     near(layout.blocks[2].meters[0].height, 10 * scale) &&
                     near(layout.blocks[2].meters[1].height, 4 * scale) &&
@@ -488,6 +656,9 @@ void run_design_tests() {
 
     scaling_tests();
     content_width_tests();
+    temperature_reference_layout_tests();
+    temperature_visibility_layout_tests();
+    temperature_appearance_tests();
     visibility_layout_tests();
     using namespace loadbar;
     Metric old_value{50, Status::valid, Unit::percent, {}, {}, {}};
@@ -616,7 +787,7 @@ void run_design_tests() {
             "Legacy percent converts once using monitor/DPI then applies the 40-DIP minimum");
     require(migrate_thickness(*legacy, {0, 0, 1080, 1920}, 192) && legacy->thickness == 40,
             "DIP thickness survives rotation and DPI change");
-    require(encode_settings(*legacy).starts_with(L"Loadbar 11 ") &&
+    require(encode_settings(*legacy).starts_with(L"Loadbar 12 ") &&
                 decode_settings(encode_settings(*legacy)) == legacy,
             "DIP-only schema persists migration");
     require(!decode_settings(

@@ -16,6 +16,7 @@ class DisplayContinuity {
   private:
     void observe(Metric &metric, Gauge kind);
     void memory(Metric &percent, Metric &bytes, std::uint64_t &capacity, std::wstring_view scope);
+    void temperature(TemperatureReading &reading, std::wstring_view identity, unsigned kind);
     struct Memory {
         ObservedValue percent, bytes;
         std::uint64_t capacity{};
@@ -26,6 +27,7 @@ class DisplayContinuity {
     };
     std::map<std::pair<std::wstring, Gauge>, ObservedValue, StreamKeyLess> values_;
     std::map<std::pair<std::wstring, std::wstring>, Memory, StreamKeyLess> memories_;
+    std::map<std::pair<std::wstring, unsigned>, TemperatureReading, StreamKeyLess> temperatures_;
     Selection gpu_, network_;
     std::map<std::wstring, Selection> known_gpus_, known_networks_;
 };

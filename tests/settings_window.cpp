@@ -64,20 +64,22 @@ void check_checkbox_background(HWND checkbox) {
 }
 void drive_settings_tests() {
     using namespace loadbar;
-    for (unsigned mask = 0; mask < 16; ++mask) {
+    for (unsigned mask = 0; mask < 32; ++mask) {
         Settings switches;
         switches.cpu_squares = (mask & 1U) != 0;
         switches.show_hover_info = (mask & 2U) != 0;
         switches.open_task_manager_on_click = (mask & 4U) != 0;
         switches.show_tooltips = (mask & 8U) != 0;
+        switches.show_temperatures = (mask & 16U) != 0;
         check(decode_settings(encode_settings(switches)) == switches,
               "All preference combinations round trip");
-        check(!collection_changed({}, switches),
-              "Presentation preferences do not restart providers");
+        check(collection_changed({}, switches) == !switches.show_temperatures,
+              "Only the temperature switch changes collection among these preferences");
     }
     const auto legacy = decode_settings(L"Loadbar 9 0 40 1000 \"\" \"gpu\" \"nic\" 0 1 1 0 0");
     check(legacy && !legacy->cpu_squares && legacy->show_hover_info &&
-              legacy->open_task_manager_on_click && legacy->show_tooltips,
+              legacy->open_task_manager_on_click && legacy->show_tooltips &&
+              legacy->show_temperatures,
           "Existing settings receive backward-compatible interaction defaults");
     const auto prefix10 = L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 ";
     for (const auto *tail : {L"", L"0 1", L"2 1 1", L"0 2 1", L"0 1 -1", L"0 1 1 extra"}) {
@@ -94,6 +96,16 @@ void drive_settings_tests() {
     for (const auto *tail : {L"", L"2", L"-1", L"true", L"0 extra"}) {
         check(!decode_settings(std::wstring(prefix11) + tail),
               "Missing, malformed and trailing tooltip fields are rejected");
+    }
+    for (const auto *tail : {L"0", L"1"}) {
+        const auto old = decode_settings(std::wstring(prefix11) + tail);
+        check(old && old->show_temperatures,
+              "Schema eleven enables temperatures independently of tooltip preference");
+    }
+    const auto prefix12 = L"Loadbar 12 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 0 1 1 1 ";
+    for (const auto *tail : {L"", L"2", L"-1", L"true", L"0 extra"}) {
+        check(!decode_settings(std::wstring(prefix12) + tail),
+              "Temperature preference rejects missing, malformed and trailing fields");
     }
     Settings settings;
     check(settings.hidden_disks.empty() && disk_visible(L"new", settings), "New disks are visible");
@@ -265,7 +277,7 @@ void migration_tests() {
         Settings settings;
         settings.thickness = value;
         check(valid_settings(settings) && decode_settings(encode_settings(settings)) == settings &&
-                  encode_settings(settings).starts_with(L"Loadbar 11 "),
+                  encode_settings(settings).starts_with(L"Loadbar 12 "),
               "Current schema boundaries round trip");
     }
     for (const int version : {1, 2, 3, 4, 5, 6, 7}) {
@@ -324,7 +336,7 @@ void migration_tests() {
     Settings fractional;
     fractional.thickness = 40.25;
     check(!valid_settings(fractional), "New settings reject fractional DIPs");
-    check(!decode_settings(L"Loadbar 12 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
+    check(!decode_settings(L"Loadbar 13 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
 }
 void draft_tests() {
     using namespace loadbar;
@@ -405,7 +417,8 @@ struct SettingsWindowTests {
                 unsigned pops{}, activations{};
                 bool active{};
             } tooltip_calls;
-            Application app(instance);
+            const auto application = std::make_unique<Application>(instance);
+            auto &app = *application;
             app.settings_ = {};
             app.window_ = CreateWindowExW(0, L"Loadbar.Bar", L"", WS_POPUP, 0, 0, 1, 1, nullptr,
                                           nullptr, instance, &app);
@@ -576,7 +589,8 @@ struct SettingsWindowTests {
             check(label_colors, "Every label uses transparent text on system window background");
             SendMessageW(app.settings_window_, WM_SYSCOLORCHANGE, 0, 0);
             SendMessageW(app.settings_window_, WM_THEMECHANGED, 0, 0);
-            for (const int id : {kCpuSquares, kHoverInfo, kTooltips, kTaskManagerClick}) {
+            for (const int id :
+                 {kCpuSquares, kTemperatures, kHoverInfo, kTooltips, kTaskManagerClick}) {
                 const auto box = GetDlgItem(app.settings_content_, id);
                 check(box != nullptr, "Preference checkbox exists");
                 for (const auto state : {BST_UNCHECKED, BST_CHECKED}) {
@@ -597,6 +611,7 @@ struct SettingsWindowTests {
                       "Each checkbox participates in the settings draft");
                 const auto draft = settings_from_draft(app.settings_draft());
                 check(draft && (id != kCpuSquares || draft->cpu_squares) &&
+                          (id != kTemperatures || !draft->show_temperatures) &&
                           (id != kHoverInfo || !draft->show_hover_info) &&
                           (id != kTaskManagerClick || !draft->open_task_manager_on_click) &&
                           (id != kTooltips || !draft->show_tooltips),
@@ -608,6 +623,13 @@ struct SettingsWindowTests {
                 check(SendMessageW(box, BM_GETCHECK, 0, 0) == initial && !enabled(kApplySettings),
                       "Cancel restores preference and dirty state");
             }
+            check(GetNextDlgTabItem(app.settings_window_,
+                                    GetDlgItem(app.settings_content_, kCpuSquares),
+                                    FALSE) == GetDlgItem(app.settings_content_, kTemperatures) &&
+                      GetNextDlgTabItem(app.settings_window_,
+                                        GetDlgItem(app.settings_content_, kTemperatures),
+                                        FALSE) == GetDlgItem(app.settings_content_, kHoverInfo),
+                  "Temperature checkbox sits after CPU squares in native keyboard order");
             check(GetNextDlgTabItem(app.settings_window_,
                                     GetDlgItem(app.settings_content_, kHoverInfo),
                                     FALSE) == GetDlgItem(app.settings_content_, kTooltips) &&

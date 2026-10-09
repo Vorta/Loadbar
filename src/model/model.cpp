@@ -51,11 +51,14 @@ std::wstring metric_text(MetricView metric, ByteFormat format) {
     if (metric.status != Status::valid) {
         return status_text(metric.status);
     }
-    if (!std::isfinite(metric.value) || metric.value < 0) {
+    if (!std::isfinite(metric.value) || (metric.value < 0 && metric.unit != Unit::celsius)) {
         return status_text(Status::error);
     }
     if (metric.unit == Unit::percent) {
         return std::format(L"{:.1f}%", metric.value);
+    }
+    if (metric.unit == Unit::celsius) {
+        return std::format(L"{:.1f}°C", metric.value);
     }
     if (format == ByteFormat::tooltip) {
         constexpr double mb = 1048576.0, gb = 1073741824.0;
@@ -81,17 +84,20 @@ std::wstring metric_text(MetricView metric, ByteFormat format) {
 }
 MetricView presented_metric(MetricView metric) noexcept {
     auto result = metric;
-    if (metric.status == Status::valid && std::isfinite(metric.value) && metric.value >= 0) {
+    const auto usable = [&](double value) {
+        return std::isfinite(value) && (value >= 0 || metric.unit == Unit::celsius);
+    };
+    if (metric.status == Status::valid && usable(metric.value)) {
         return result;
     }
-    if (metric.retained && std::isfinite(metric.retained->value) && metric.retained->value >= 0) {
+    if (metric.retained && usable(metric.retained->value)) {
         result.value = metric.retained->value;
         result.timestamp = metric.retained->timestamp;
         if (!result.session_peak) {
             result.session_peak = metric.retained->session_peak;
         }
         result.status = Status::valid;
-    } else if (metric.status == Status::warming_up) {
+    } else if (metric.status == Status::warming_up && metric.unit != Unit::celsius) {
         result.value = 0;
         result.status = Status::valid;
     } else if (metric.status == Status::valid) {
@@ -108,7 +114,9 @@ std::wstring retention_text(MetricView metric, Clock::time_point now) {
             std::max(0.0, std::chrono::duration<double>(now - metric.retained->timestamp).count());
         return std::format(L"Last valid reading; {:.0f} s old", age);
     }
-    return metric.status == Status::warming_up ? L"Initial warm-up: showing zero" : L"";
+    return metric.status == Status::warming_up && metric.unit != Unit::celsius
+               ? L"Initial warm-up: showing zero"
+               : L"";
 }
 Metric percentage(double used, double total, Clock::time_point now) {
     if (!std::isfinite(used) || !std::isfinite(total) || total <= 0 || used < 0 || used > total) {

@@ -1,5 +1,44 @@
 # Packaging and release evidence
 
+## 1.2.0 release artifact
+
+Packaged on 2026-10-09 with `pwsh -NoProfile -File scripts/package-release.ps1` after the
+temperature-toggle review fix. Release configure/build and all four CTest suites passed
+(4.02 s). The staged `out/release/1.2.0/Loadbar.exe` is 1,366,016 bytes, with product/file
+version 1.2.0 and author Vorta. The ZIP contains only the same executable, verified byte-for-byte.
+
+| Asset | SHA-256 |
+| --- | --- |
+| Loadbar.exe | `48b6e7b865e74f3e80aad073c6a18815b34b31218c397dd861730fb79163b107` |
+| Loadbar-1.2.0-windows-x64.zip | `0289ae2eca7d3fb78b8e31ed71644da6047c5d0284ea1290d739d565eca33d87` |
+
+`dumpbin /dependents` and `/headers` were repeated on the staged executable, confirming the
+properties below. Logs are `out/v120-{dependents,headers}.log`; packaging output is
+`out/v120-final-package.log`. The dynamic-load audit found only the restricted vendor loader.
+
+The Release executable built on 2026-10-09 embeds Geist Mono, its complete OFL notice and a
+native Licenses dialog. Resource tests compare the embedded font and notice byte-for-byte
+with their repository files. Touching only `resources/fonts/GeistMono.ttf`, and then only
+`resources/fonts/OFL.txt`, separately rebuilt `fonts.rc.res` and relinked `Loadbar.exe`.
+The original files on `D:` are no longer build/runtime inputs.
+
+`dumpbin /dependents out/build/windows-x64-release/Loadbar.exe` reported only Windows DLLs
+and API sets; no application DLL, VC++ redistributable or ASan runtime. `/headers` confirmed
+x64 GUI, CFG, ASLR, DEP, high-entropy VA and an empty delay-import directory.
+The graphics temperature calls resolve through Windows GDI32; private fonts use DirectWrite.
+The new optional vendor fallbacks dynamically load only System32 `nvapi64.dll`,
+`amdadlx64.dll`, or `ControlLib.dll` supplied by installed drivers. They are not shipped or
+mandatory imports. Their transitive driver dependencies need clean-machine verification;
+static import inspection alone cannot establish this. Vendor notices are embedded and
+resource-tested against their source bytes alongside the font notice.
+Ninja's `fonts.rc.res` dependency query also lists all three vendor notices explicitly.
+
+Clean-machine execution, minimum-build compatibility, the full interactive matrix, hardware
+accuracy and performance/soak remain separate pending gates. The executable path is
+`out/build/windows-x64-release/Loadbar.exe`. After initially keeping the candidate staged,
+the owner reported successful manual use and requested [1.2.0](releases/1.2.0.md) publication
+with the remaining validation gaps disclosed. Publication does not establish that those gates passed.
+
 ## 1.1.5 release artifact
 
 Built on 2026-10-09 using `pwsh -NoProfile -File scripts/package-release.ps1`.

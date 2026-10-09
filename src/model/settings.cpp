@@ -30,6 +30,7 @@ bool collection_changed(const Settings &before, const Settings &after) {
     return before.gpu_id != after.gpu_id || before.network_id != after.network_id ||
            before.interval_ms != after.interval_ms || before.gpu_visible != after.gpu_visible ||
            before.network_visible != after.network_visible ||
+           before.show_temperatures != after.show_temperatures ||
            before.hidden_disks != after.hidden_disks;
 }
 bool valid_settings(const Settings &settings) {
@@ -55,8 +56,8 @@ bool valid_settings(const Settings &settings) {
 std::wstring encode_settings(const Settings &settings) {
     std::wostringstream stream;
     stream.imbue(std::locale::classic());
-    // v11 separates popup tooltips from inline hover information.
-    stream << L"Loadbar 11 " << static_cast<unsigned>(settings.edge) << L' '
+    // v12 controls temperature collection and presentation together.
+    stream << L"Loadbar 12 " << static_cast<unsigned>(settings.edge) << L' '
            << std::setprecision(17) << settings.thickness << L' ' << settings.interval_ms << L' '
            << std::quoted(settings.monitor_id) << L' ' << std::quoted(settings.gpu_id) << L' '
            << std::quoted(settings.network_id) << L' ' << static_cast<unsigned>(settings.alignment)
@@ -67,7 +68,8 @@ std::wstring encode_settings(const Settings &settings) {
         stream << L' ' << std::quoted(id);
     }
     stream << L' ' << settings.cpu_squares << L' ' << settings.show_hover_info << L' '
-           << settings.open_task_manager_on_click << L' ' << settings.show_tooltips;
+           << settings.open_task_manager_on_click << L' ' << settings.show_tooltips << L' '
+           << settings.show_temperatures;
     return stream.str();
 }
 std::optional<Settings> decode_settings(std::wstring_view text) {
@@ -80,7 +82,7 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
     std::wstring name;
     unsigned version{}, edge{}, mode{}, scale{};
     stream >> name >> version >> edge;
-    if (!stream || name != L"Loadbar" || version < 1 || version > 11 || edge > 4) {
+    if (!stream || name != L"Loadbar" || version < 1 || version > 12 || edge > 4) {
         return std::nullopt;
     }
     if (version < 3) {
@@ -170,6 +172,14 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
             return std::nullopt;
         }
         result.show_tooltips = tooltips != 0;
+    }
+    if (version >= 12) {
+        unsigned temperatures{};
+        stream >> temperatures;
+        if (!stream || temperatures > 1) {
+            return std::nullopt;
+        }
+        result.show_temperatures = temperatures != 0;
     }
     // Validate old records before retiring ceilings/log mode. No old peak is inferred.
     if (version < 4 && !std::ranges::all_of(

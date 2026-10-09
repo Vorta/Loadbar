@@ -31,6 +31,7 @@ std::optional<Settings> settings_from_draft(const SettingsDraft &draft) {
     result.network_visible = draft.network_visible;
     result.hidden_disks = draft.hidden_disks;
     result.cpu_squares = draft.cpu_squares;
+    result.show_temperatures = draft.show_temperatures;
     result.show_hover_info = draft.show_hover_info;
     result.show_tooltips = draft.show_tooltips;
     result.open_task_manager_on_click = draft.open_task_manager_on_click;

@@ -1,5 +1,322 @@
 # Testing and verification
 
+## Temperature control and resource follow-up (1.2.0)
+
+On 2026-10-09, final Debug, Release, RelWithDebInfo and ASan configure/builds passed all
+four CTest suites each (10.80 s, 4.15 s, 4.25 s and 26.16 s). Logs are
+`out/v120-final-<preset>-{configure,build,test}.log`. These include the review fix for
+coalesced temperature toggles, not only the earlier provider/rendering changes.
+
+Coverage includes schema 12 migration/defaults/validation; the fifth native checkbox's
+background, keyboard order, draft/Cancel and responsive layout; disabled cold-start and
+zero new sensor calls; pending cancellation and prompt re-enable; completed-buffer release;
+last-valid ages; and no unrelated counter/peak reset. A real worker started paused verifies
+that off/on transitions survive configuration coalescing without performing hardware reads.
+Production-renderer tests cover all edges, hover/high contrast, no-temperature pixel
+equivalence, cache reuse, font invalidation and failed-resource recovery. Disabled
+temperatures do not schedule freshness/retention deadlines or trigger layout/paint changes.
+
+Commands run from the pinned developer environment:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check
+cmake --build --preset windows-x64-debug --target tidy
+cmake --build --preset windows-x64-debug --target analyze
+pwsh -NoProfile -File scripts/package-release.ps1
+dumpbin /dependents out/release/1.2.0/Loadbar.exe
+dumpbin /headers out/release/1.2.0/Loadbar.exe
+git -c core.safecrlf=false diff --check
+```
+
+The first full clang-tidy run flagged an optional access in a new test. Binding the optional
+to a const reference before its checked use resolved it without suppressions or weakened
+assertions. Final format-check, full clang-tidy and MSVC analysis passed with no actionable
+project diagnostics. Logs are `out/v120-final-{format-check,tidy,analyze}.log`. Packaging
+repeated Release tests successfully (4/4, 4.02 s), verified the single-entry ZIP, and staged
+the exact inspected executable. Hashes and import/security evidence are in [packaging.md](packaging.md).
+
+The first adversarial pass had no actionable findings and independently probed failed
+cancellation, path rebinding, late completion after disable and cleanup. The performance
+pass confirmed all three original resource improvements but found that coalesced off/on
+settings could lose the temperature reset. The added temperature generation fixes that
+path independently of the GPU/network/global counter generations; review passes restart
+after this fix. Fake/offscreen counts are in [the performance review](performance-review-1.2.0.md).
+
+The follow-up performance review found no actionable issues. Its isolated `/O2 /MT /W4 /WX`
+production-code probe (`out/v120-performance-one/build-final.ps1`) passed the actual-worker
+coalescing, Collector reset isolation, provider and renderer regressions, preserving the
+previously measured reductions in vendor calls and hover-layout creation.
+
+A different final reviewer then found no actionable correctness, lifecycle, settings,
+rendering-cache or resource issues. Its independent three-drive probe exercised delayed
+successful completion after failed cancellation and rapid off/on, alongside the production
+temperature/vendor regressions. The production Release offscreen renderer passed 24
+continuity/resize, 49 scaling and 65 fixture checks in its isolated output directory.
+Evidence is under `out/review-v120-final-independent/`. This establishes two independent,
+consecutive clean reviews after the coalescing fix, not completion of the manual release gates.
+
+Independent probes (fake providers/offscreen rendering only) completed with exit code 0:
+
+```powershell
+./out/vendor-capability/run-tests.ps1
+./out/v120-performance-one/build-final.ps1
+pwsh -NoProfile -File out/review-v120-final-independent/run.ps1
+./out/build/windows-x64-release/loadbar_render_tests.exe out/review-v120-final-independent/render
+```
+
+Manual follow-up: exit the current application, launch the candidate, open Settings and
+apply Show temperatures off/on. Confirm readouts/effects disappear, ordinary metrics continue,
+and available temperatures return; repeat on a vertical edge and after reopening Settings.
+Close dismisses Settings; Exit Loadbar or tray/bar Exit ends monitoring. Live Shell/display
+changes, hardware accuracy, controlled 1-Hz performance, one-hour soak and clean-machine
+execution have not been performed by this change.
+The owner initially kept v1.2.0 staged, then reported successful manual use and requested
+publication with the remaining validation gaps disclosed. The agent did not launch or
+reconfigure the live AppBar. The owner's report does not establish completion of the full
+manual validation matrix or the performance and clean-machine gates.
+
+Before publication, `cmake --preset windows-x64-release`, `cmake --build --preset
+windows-x64-release` and `ctest --preset windows-x64-release --output-on-failure` passed
+again (4/4, 4.03 s). SHA-256 verification confirmed the rebuilt executable, staged executable
+and sole ZIP entry were identical; both assets matched `SHA256SUMS.txt`.
+The staged full diff check reported whitespace in the byte-preserved upstream headers,
+notices and third-party checksum list. The project-owned diff check passed with
+`git diff --cached --check -- . ':(exclude)third_party/**' ':(exclude)resources/fonts/OFL.txt'`;
+all vendor files matched their pinned SHA-256 values. Upstream files were not reformatted.
+
+## Temperature tint and alignment refinement (1.2.0, unpublished)
+
+On 2026-10-09, Debug, Release, RelWithDebInfo and ASan configure/builds succeeded and each
+passed all four CTest suites (10.91 s, 5.77 s, 5.88 s and 26.07 s respectively).
+The non-mutating format check, full clang-tidy and MSVC analysis passed with no actionable
+project diagnostics. Analysis logs are `out/temperature-tint-tidy.log` and
+`out/temperature-tint-analyze.log`.
+
+New tests cover original icon colors through 60°C, a half blend at 75°C, final red at 90°C,
+the 90–95°C glow ramp for all four thermal component types, and saturation above 95°C.
+Production-renderer tests distinguish fractional tint/glow changes at the same displayed
+integer, retain high-contrast behavior and verify that network is unaffected. Resource
+creation counters confirm that fractional changes reuse text layouts/ink measurements and
+glow masks. Existing retained/unavailable and resource-failure recovery tests also pass.
+
+Geometry and embedded-font ink checks cover all edges, both CPU shape settings, 40/60/120-DIP
+requests (with the readable minimum), Windows text scales 1/1.5/2.25 and 96/120/144/192 DPI.
+Signed and three-digit readouts clear their icons and stay within hit/paint bounds. Horizontal
+ink bottoms share the graphic bottom after pixel snapping. Initial test failures identified
+two old expectations (16-DIP icons and unchanged fractional tint); these were updated to the
+new behavior with separate coverage for unchanged text outside the ramps.
+
+Commands run from the pinned developer environment:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check
+cmake --build --preset windows-x64-debug --target tidy
+cmake --build --preset windows-x64-debug --target analyze
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+git -c core.safecrlf=false diff --check
+```
+
+Release `Loadbar.exe` is 1,360,384 bytes, reports 1.2.0, and imports only Windows components.
+SHA-256: `A812BA480BDAFCF7E6DDBA00CEBBC0FCCB5B4D0D82F9CF4BE5B2E6D50F3AB665`.
+Installed-driver optional loads remain unchanged. Fresh reference previews and five
+`temperature-ramp-top-1400x60-2x-*.png` examples are in the Release `render-fixtures` folder.
+Horizontal normal/maximum-glow and left/right previews were visually inspected. These are
+synthetic readings, including RAM; no new hardware accuracy or live performance claim follows.
+
+Manual check: launch the Release executable, select Top and 60 DIPs, inspect icon size and
+number alignment, then check Left/Right with either CPU shape setting. Temperatures appear
+only after valid provider readings; live RAM collection remains outside provider coverage.
+Exit via the tray or Settings → Exit Loadbar. No AppBar was launched during this work;
+interactive Windows, hardware accuracy, performance/soak and clean-machine packaging remain
+pending. No commit, push or release was performed.
+
+## Temperature design alignment (1.2.0, unpublished)
+
+On 2026-10-09, the full strip was aligned to the original 1200 × 60-DIP component
+export. Debug, Release, RelWithDebInfo and ASan configure/builds succeeded; each passed
+all four CTest suites (13.21 s, 8.13 s, 8.55 s and 31.74 s respectively). Formatting,
+full clang-tidy and MSVC analysis passed with no actionable project diagnostics. Logs are
+`out/temperature-spacing-tidy.log` and `out/temperature-spacing-analyze.log`.
+
+New deterministic tests assert the reference positions, margins, divider, icon/readout
+centers, equal device widths, readable temperature text, and non-overlap on all four edges
+at 40/60/120 DIPs and increased text scaling. DirectWrite tests check actual embedded-font
+ink bounds for `64°C`, `100°C`, `250°C` and `-99°C`. Font-failure recovery now covers the
+additional cached temperature format. The shortened-Shell-edge fixture was updated from
+600 to 640 DIPs: under the new spacing, shortening to 560 DIPs raises the readable minimum
+from 40 to 64 DIPs. The renegotiation and bounded-retry assertions remain intact.
+
+The production renderer generated 24 normal/hot/critical comparison PNGs at 1×/2× density:
+`temperature-reference-{top,left,right}-*-{1x,2x}-{normal,hot,critical}.png` in each build's
+`render-fixtures` directory. Horizontal previews include 1200 × 60 and 1400 × 60 DIPs;
+vertical previews are 60 × 1400 DIPs. Release horizontal and both vertical previews were
+visually inspected, including comparison against the original 2× export. All example
+readings are synthetic. Existing temperature availability/retention/high-contrast previews
+were regenerated. Both local reference images match the supplied originals by SHA-256.
+
+Commands run from the pinned developer environment:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check
+cmake --build --preset windows-x64-debug --target tidy
+cmake --build --preset windows-x64-debug --target analyze
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+git -c core.safecrlf=false diff --check
+```
+
+The Release EXE is 1,356,288 bytes, reports 1.2.0, and imports only Windows components.
+SHA-256: `4284D7FD9791D8E84ABB0B476155331D7E9F59DC4EE8C4943C99E61DB2752B8D`.
+No live AppBar was launched or changed, no hardware provider was newly validated, and no
+performance/soak or clean-machine packaging gate was run. For manual comparison, launch the
+Release executable, select Top and 60 DIPs, then compare both CPU-shape settings and the
+Left/Right edges. Exit via the tray menu or Settings → Exit Loadbar. Real temperatures
+appear only when their provider has returned a valid reading; RAM collection remains
+unfinished. This change was not committed, published or released.
+
+## Temperatures and Geist Mono (1.2.0, unpublished)
+
+Implemented and checked on 2026-10-09 with the unchanged pinned toolchain. Final complete
+CTest runs passed **4/4** in Debug (11.22 s), Release (5.88 s), RelWithDebInfo (5.12 s), and
+ASan (23.89 s). A subsequent test-only explicit-float correction passed the rendering suite
+again in all four presets. Formatting, full clang-tidy and MSVC analysis passed after fixing
+the optional-access, narrowing and cleanup-result findings. A final GPU error-reporting
+correction passed targeted clang-tidy, unit/resource tests in all four presets and MSVC
+analysis again. No diagnostics were disabled to obtain these results.
+
+Coverage includes sensor selection/duplicate indices, malformed/truncated descriptors,
+signed values, thresholds, no initial fabricated zero, identity-scoped retention and age,
+one-Hz cadence, sleep/Hide/discovery failure, access errors, reconnect with unchanged identity,
+asynchronous completion, cancellation and retry backoff. Offscreen production-renderer tests
+cover all four edges, absent/normal/critical/retained/mixed readings, unchanged icons before
+first observation, high contrast, 100/150/200% DPI/text scaling, font weights/cache/recovery,
+and temperature-only repaint decisions. The repaint test uses a hidden HWND; it does not
+exercise live Shell behavior. Larger test fixtures were moved to owned heap storage to
+preserve the MSVC stack-usage check, without suppressing it.
+
+Commands used from the developer shell, repeated after relevant fixes:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check tidy analyze
+cmake --build --preset windows-x64-debug --target analyze
+clang-tidy -p out/build/windows-x64-debug/tidy-commands src/telemetry/temperature.cpp tests/settings_window.cpp tests/discovery.cpp tests/continuity.cpp
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --build --preset $preset
+    ctest --preset $preset -R loadbar-rendering --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check analyze
+cmake --build --preset windows-x64-debug --target tidy
+clang-tidy -p out/build/windows-x64-debug/tidy-commands src/telemetry/temperature.cpp
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --build --preset $preset
+    ctest --preset $preset -R 'loadbar-unit|loadbar-resources' --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check analyze
+cmake --build --preset windows-x64-release --target loadbar_temperature_probe
+& .\out\build\windows-x64-release\loadbar_temperature_probe.exe --read-only
+foreach ($asset in @('GeistMono.ttf', 'OFL.txt')) {
+    cmake -E touch "resources/fonts/$asset"
+    cmake --build --preset windows-x64-release --target loadbar
+}
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+dumpbin /headers out/build/windows-x64-release/Loadbar.exe
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+The explicitly invoked read-only probe ran without elevation and returned GPU **57.3°C**
+(main sensor, physical adapter 0), drive 1 **59°C**, and drive 2 **41°C** (device sensor 0).
+It opened no AppBar/window and generated no workload. These observations establish provider
+availability on this host only, not sensor accuracy or coverage of other hardware. Ordinary
+tests use fake providers. This initial check preceded the ASUS CPU/vendor GPU extension
+recorded below. RAM temperature remains outside provider coverage. No release was published.
+
+Release synthetic previews are in `out/build/windows-x64-release/render-fixtures/`:
+`temperature-top-60-mixed.png` shows available GPU/one-drive temperatures; `temperature-*-60-normal.png`
+and `temperature-*-60-critical.png` demonstrate every component, including synthetic CPU/RAM.
+Both horizontal and vertical Release previews were visually inspected.
+
+For the first manual test, exit the existing Loadbar through its tray/bar menu, then launch
+`out/build/windows-x64-release/Loadbar.exe`. Check the first-reading icon transition, CPU, GPU and
+both drive readouts, Settings sensor/status details, independent hover/tooltip toggles, Hide,
+all edges and thicknesses, and the new **Licenses** dialog. Use **Exit Loadbar** in Settings
+or **Exit** in the tray/bar menu for normal cleanup. Compare temperatures with the same sensor
+scope in a trusted hardware tool; do not equate GPU hotspot and main temperatures.
+
+Live AppBar/DPI/text-scale/accessibility checks, actual sensor-failure retention, sleep/resume,
+removable-drive cancellation, integrated/linked GPUs, storage bridges, HDD sleep behavior,
+clean-machine/minimum-Windows execution and controlled performance/soak remain pending.
+
+### ASUS CPU and vendor GPU extension
+
+On 2026-10-09, the final incremental builds passed all four CTest suites in Debug
+(12.83 s), Release (4.63 s), RelWithDebInfo (5.60 s) and ASan (25.08 s), with the
+same pinned toolchain. Format-check, full clang-tidy and MSVC analysis passed. The vendor regression
+tests inject API tables: LUID/physical-member matching, sensor filtering, missing exports,
+failed initialization, malformed enumeration, non-finite readings, cached bindings,
+exception cleanup, fallback, backoff, Hide and retained source/age. ASUS tests cover the
+exact read-only request, parser bounds, cadence, pending I/O, timeout, reset and shutdown.
+These fakes do not establish real driver ABI compatibility or sensor accuracy.
+
+Additional commands (the four-preset build/CTest loop above was repeated):
+
+```powershell
+cmake --build --preset windows-x64-debug --target format-check
+cmake --build --preset windows-x64-debug --target analyze
+cmake --build --preset windows-x64-debug --target tidy
+cmake --build --preset windows-x64-release --target loadbar_temperature_probe
+& ./out/build/windows-x64-release/loadbar_temperature_probe.exe --read-only --vendors
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+dumpbin /headers out/build/windows-x64-release/Loadbar.exe
+ninja -C out/build/windows-x64-release -t query CMakeFiles/loadbar.dir/resources/fonts.rc.res
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+The Release probe ran with a non-elevated token and returned ASUS firmware CPU **97°C**,
+Windows GPU **59.6°C**, NVIDIA NVAPI GPU core **59°C**, and drives **61/45°C**. These are
+transient observations during development checks, not an idle baseline or cross-sensor
+accuracy comparison. IGCL initialized but reported no temperature sensors on this host;
+AMD hardware/runtime was unavailable for a real ADLX check. NVIDIA first bind/read took
+13.48 ms; Intel initialization/enumeration took 259.79 ms. Neither is steady-state overhead.
+
+An earlier Debug vendor probe exposed a CFG failure when invoking a cached
+`GetProcAddress` pointer after loading the NVIDIA shim. Keeping the import call inside
+an application lambda fixed the reproduction; subsequent Debug and Release probes exited
+successfully with CFG still enabled. Static-analysis findings were fixed without disabling
+checks. The Release import table contains Windows components only; PE headers retain
+x64, ASLR, DEP, high-entropy VA and CFG. Optional vendor DLLs are loaded from System32;
+their installed-driver dependencies still require clean-machine validation. All 15 vendor
+material hashes matched `third_party/SHA256SUMS`.
+
+Pending: AMD hardware ABI/edge readings, Intel hardware that exposes GPU-domain sensors,
+other ASUS firmware variants, linked GPUs, actual failure/recovery and cancellation latency,
+sensor-scope accuracy comparisons, live UI, controlled performance/soak and clean-machine
+packaging. No AppBar was launched and no existing Loadbar process was stopped for these checks.
+
 ## 1.1.5 publication build
 
 On 2026-10-09, `pwsh -NoProfile -File scripts/package-release.ps1` built version 1.1.5,

@@ -6,6 +6,25 @@
 #include <map>
 
 namespace loadbar {
+Color component_icon_color(unsigned component) noexcept {
+    constexpr std::array colors{kCpuIcon, rgb(0x8EB6DC), rgb(0xB1AADB), rgb(0x96BD96),
+                                rgb(0xD79FAF)};
+    return component < colors.size() ? colors[component] : kSecondary;
+}
+TemperatureAppearance temperature_appearance(unsigned component, double celsius) noexcept {
+    TemperatureAppearance result{component_icon_color(component), kSecondary};
+    if (component >= 4 || !valid_temperature(celsius)) {
+        return result;
+    }
+    constexpr std::array colors{kSecondary, rgb(0xF2B840), rgb(0xFF623A), rgb(0xFF3456)};
+    result.text = colors[static_cast<std::size_t>(temperature_band(component, celsius))];
+    const auto blend = static_cast<float>(std::clamp((celsius - 60) / 30, 0.0, 1.0));
+    result.icon = {std::lerp(result.icon.r, result.text.r, blend),
+                   std::lerp(result.icon.g, result.text.g, blend),
+                   std::lerp(result.icon.b, result.text.b, blend)};
+    result.glow_alpha = .55F * static_cast<float>(std::clamp((celsius - 90) / 5, 0.0, 1.0));
+    return result;
+}
 bool metric_changed(MetricView before, MetricView after, Clock::time_point now,
                     unsigned interval_ms) {
     return before.value != after.value ||
