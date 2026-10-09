@@ -616,7 +616,7 @@ void run_design_tests() {
             "Legacy percent converts once using monitor/DPI then applies the 40-DIP minimum");
     require(migrate_thickness(*legacy, {0, 0, 1080, 1920}, 192) && legacy->thickness == 40,
             "DIP thickness survives rotation and DPI change");
-    require(encode_settings(*legacy).starts_with(L"Loadbar 10 ") &&
+    require(encode_settings(*legacy).starts_with(L"Loadbar 11 ") &&
                 decode_settings(encode_settings(*legacy)) == legacy,
             "DIP-only schema persists migration");
     require(!decode_settings(

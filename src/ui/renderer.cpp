@@ -870,8 +870,7 @@ std::size_t Renderer::tooltip_target(float x, float y) const noexcept {
 }
 std::wstring Renderer::tooltip(float x, float y, const Snapshot &snapshot,
                                const Settings &settings) const {
-    return settings.show_hover_info
-               ? metric_tooltip(layout_, x, y, snapshot, settings, Clock::now())
-               : L"";
+    return settings.show_tooltips ? metric_tooltip(layout_, x, y, snapshot, settings, Clock::now())
+                                  : L"";
 }
 } // namespace loadbar

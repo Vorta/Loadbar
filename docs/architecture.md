@@ -57,12 +57,17 @@ drawing transforms and clipping, including failed text-resource creation.
 
 ## Settings
 
-A versioned registry value stores committed settings. Schema 10 adds the CPU-square, hover-info
-and Task Manager click flags, defaulting to false/true/true for schemas 1–9. They affect only
-UI behavior and do not restart collectors. Bar tooltips are popped and deactivated with
-[TTM_ACTIVATE](https://learn.microsoft.com/en-us/windows/win32/controls/ttm-activate) when hover info
-is disabled. Schema 9 added a set of explicitly hidden physical-disk identities to the independent
-GPU/network visibility flags and whole-number thickness;
+A versioned registry value stores committed settings. Schema 11 adds an independent popup-tooltip
+flag, enabled for new installations and migrated from the old hover-info flag for schemas 1–10.
+Schema 10 added CPU-square, hover-info and Task Manager click flags, defaulting to false/true/true
+for schemas 1–9. These choices affect only UI behavior and do not restart collectors.
+Show info on hover controls inline numbers; Show tooltips controls the bar popup. Disabling
+tooltips pops and deactivates them with
+[TTM_ACTIVATE](https://learn.microsoft.com/en-us/windows/win32/controls/ttm-activate), and switching
+the option clears the text cache. Retention-age refresh follows tooltip visibility independently
+of inline numbers; the notification-area tooltip remains available. Schema 9 added a set of
+explicitly hidden physical-disk identities to the independent GPU/network visibility flags and
+whole-number thickness;
 older schemas validate against their original bounds before migrating percentage/fractional
 sizes and retired appearance/rate controls. Conversion uses the resolved monitor and DPI.
 Schemas 1–7 migrate with both widgets visible and device preferences intact. Loading never
@@ -102,9 +107,10 @@ hover and status deadlines invalidate content; there is no continuous rendering 
 fonts, layouts, icon geometry and bounded glow bitmaps are reused. Resource groups commit
 atomically; target loss discards only target-bound resources. See [design.md](design.md).
 
-Native tooltips and the Settings readings list expose exact values, identities and raw status.
+Native tooltips and the Settings readings list expose readings, identities and raw status.
+Tooltip byte quantities use compact MB/GB; inline and Settings formatting remain independent.
 Painted cores are not separate UI Automation elements. List structure is reused across samples.
 
-Defaults, `resources/loadbar.ico`, manifest, version 1.1.0 metadata and the MIT notice are
+Defaults, `resources/loadbar.ico`, manifest, version metadata and the MIT notice are
 embedded. `resources/icon.svg` is editable artwork; it is not loaded at runtime. CMake tracks
 file-backed resource and manifest dependencies explicitly.

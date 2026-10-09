@@ -3,8 +3,10 @@
 Loadbar uses a graphics-first layout with an opaque background, outlined device icons,
 rounded meter tracks and static high-use glows. Installed Consolas is preferred, with
 Cascadia Mono as fallback. Numbers appear only on hover; native tooltips and Settings
-provide complete readings when inline text cannot fit. **Show info on hover** disables both
-the overlays and the bar tooltip; it leaves Settings readings and the tray tooltip available.
+provide complete readings when inline text cannot fit. **Show info on hover** controls inline
+numbers, and **Show tooltips** independently controls the native bar popup. Both are enabled by
+default; Settings readings and the tray tooltip remain available. Popup byte quantities and rates
+use compact MB/GB and MB/s/GB/s with one decimal and explicitly binary units.
 
 ## Layout and scaling
 

@@ -55,8 +55,8 @@ bool valid_settings(const Settings &settings) {
 std::wstring encode_settings(const Settings &settings) {
     std::wostringstream stream;
     stream.imbue(std::locale::classic());
-    // v10 adds presentation/interaction choices; earlier records retain their defaults.
-    stream << L"Loadbar 10 " << static_cast<unsigned>(settings.edge) << L' '
+    // v11 separates popup tooltips from inline hover information.
+    stream << L"Loadbar 11 " << static_cast<unsigned>(settings.edge) << L' '
            << std::setprecision(17) << settings.thickness << L' ' << settings.interval_ms << L' '
            << std::quoted(settings.monitor_id) << L' ' << std::quoted(settings.gpu_id) << L' '
            << std::quoted(settings.network_id) << L' ' << static_cast<unsigned>(settings.alignment)
@@ -67,7 +67,7 @@ std::wstring encode_settings(const Settings &settings) {
         stream << L' ' << std::quoted(id);
     }
     stream << L' ' << settings.cpu_squares << L' ' << settings.show_hover_info << L' '
-           << settings.open_task_manager_on_click;
+           << settings.open_task_manager_on_click << L' ' << settings.show_tooltips;
     return stream.str();
 }
 std::optional<Settings> decode_settings(std::wstring_view text) {
@@ -80,7 +80,7 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
     std::wstring name;
     unsigned version{}, edge{}, mode{}, scale{};
     stream >> name >> version >> edge;
-    if (!stream || name != L"Loadbar" || version < 1 || version > 10 || edge > 4) {
+    if (!stream || name != L"Loadbar" || version < 1 || version > 11 || edge > 4) {
         return std::nullopt;
     }
     if (version < 3) {
@@ -160,6 +160,16 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
         result.cpu_squares = squares != 0;
         result.show_hover_info = hover != 0;
         result.open_task_manager_on_click = click != 0;
+    }
+    // Previously the hover preference also controlled popup tooltips.
+    result.show_tooltips = result.show_hover_info;
+    if (version >= 11) {
+        unsigned tooltips{};
+        stream >> tooltips;
+        if (!stream || tooltips > 1) {
+            return std::nullopt;
+        }
+        result.show_tooltips = tooltips != 0;
     }
     // Validate old records before retiring ceilings/log mode. No old peak is inferred.
     if (version < 4 && !std::ranges::all_of(

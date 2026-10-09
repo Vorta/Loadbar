@@ -42,10 +42,10 @@ std::wstring status_text(Status status) {
     }
     return L"Error";
 }
-std::wstring metric_text(MetricView metric) {
+std::wstring metric_text(MetricView metric, ByteFormat format) {
     const auto shown = presented_metric(metric);
     if (metric.status != Status::valid && shown.status == Status::valid) {
-        return metric_text(shown) + L" — " + status_text(metric.status) + L"; " +
+        return metric_text(shown, format) + L" — " + status_text(metric.status) + L"; " +
                retention_text(metric, Clock::now());
     }
     if (metric.status != Status::valid) {
@@ -56,6 +56,17 @@ std::wstring metric_text(MetricView metric) {
     }
     if (metric.unit == Unit::percent) {
         return std::format(L"{:.1f}%", metric.value);
+    }
+    if (format == ByteFormat::tooltip) {
+        constexpr double mb = 1048576.0, gb = 1073741824.0;
+        const bool large = metric.value >= gb;
+        const auto unit = large ? L"GB" : L"MB";
+        const auto suffix = metric.unit == Unit::bytes_per_second ? L"/s" : L"";
+        if (metric.value > 0 && metric.value < 0.1 * mb) {
+            return std::format(L"<0.1 {}{}", unit, suffix);
+        }
+        return std::format(L"{:.1f} {}{}", std::max(0.0, metric.value) / (large ? gb : mb), unit,
+                           suffix);
     }
     constexpr const wchar_t *rate_units[]{L"B/s", L"KiB/s", L"MiB/s", L"GiB/s"};
     constexpr const wchar_t *byte_units[]{L"B", L"KiB", L"MiB", L"GiB"};

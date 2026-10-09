@@ -100,6 +100,8 @@ void Application::create_settings() {
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kCpuSquares);
         child(settings_content_, instance_, L"BUTTON", L"Show info on &hover",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kHoverInfo);
+        child(settings_content_, instance_, L"BUTTON", L"Show toolti&ps",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kTooltips);
         child(settings_content_, instance_, L"BUTTON", L"Open &Task Manager on click",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kTaskManagerClick);
         const auto status =
@@ -171,6 +173,8 @@ void Application::populate_settings() {
     SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(settings_.alignment), 0);
     CheckDlgButton(settings_content_, kCpuSquares,
                    settings_.cpu_squares ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(settings_content_, kTooltips,
+                   settings_.show_tooltips ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kHoverInfo,
                    settings_.show_hover_info ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kTaskManagerClick,
@@ -489,7 +493,7 @@ void Application::layout_settings() {
         }
         position(field(settings_content_, static_cast<int>(i)), bounds);
     }
-    constexpr std::array preference_ids{kCpuSquares, kHoverInfo, kTaskManagerClick};
+    constexpr std::array preference_ids{kCpuSquares, kHoverInfo, kTooltips, kTaskManagerClick};
     for (std::size_t i = 0; i < preference_ids.size(); ++i) {
         position(GetDlgItem(settings_content_, preference_ids[i]), layout.preferences[i]);
     }
@@ -560,6 +564,7 @@ SettingsDraft Application::settings_draft() const {
     draft.hidden_disks = draft_hidden_disks_;
     draft.cpu_squares = IsDlgButtonChecked(settings_content_, kCpuSquares) == BST_CHECKED;
     draft.show_hover_info = IsDlgButtonChecked(settings_content_, kHoverInfo) == BST_CHECKED;
+    draft.show_tooltips = IsDlgButtonChecked(settings_content_, kTooltips) == BST_CHECKED;
     draft.open_task_manager_on_click =
         IsDlgButtonChecked(settings_content_, kTaskManagerClick) == BST_CHECKED;
     draft.edge = selection(field(settings_content_, 3));
@@ -647,13 +652,8 @@ bool Application::commit_settings(Settings settings) {
                     error_text(saved.error()).c_str(),
                     L"Loadbar — active settings could not be saved", MB_OK | MB_ICONWARNING);
     }
-    if (previous.show_hover_info != settings_.show_hover_info) {
-        if (tooltip_) {
-            SendMessageW(tooltip_, TTM_POP, 0, 0);
-            SendMessageW(tooltip_, TTM_ACTIVATE, settings_.show_hover_info, 0);
-        }
-        tooltip_cache_ = {};
-        schedule_refresh();
+    if (previous.show_tooltips != settings_.show_tooltips) {
+        update_tooltip_activation();
     }
     if (collection_changed(previous, settings_)) {
         reconfigure_worker(previous.interval_ms != settings_.interval_ms);

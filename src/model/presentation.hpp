@@ -31,7 +31,8 @@ struct Palette {
 // Ignore diagnostics that cannot affect a graphic or its hover number.
 [[nodiscard]] bool visual_metric_changed(MetricView before, MetricView after, Clock::time_point now,
                                          unsigned interval_ms) noexcept;
-[[nodiscard]] std::wstring peak_text(MetricView metric);
+[[nodiscard]] std::wstring peak_text(MetricView metric,
+                                     ByteFormat format = ByteFormat::adaptive_binary);
 [[nodiscard]] std::wstring ram_capacity_text(const Snapshot &snapshot, Clock::time_point now,
                                              unsigned interval_ms);
 [[nodiscard]] std::wstring ram_summary(const Snapshot &snapshot, Clock::time_point now,

@@ -303,14 +303,26 @@ void preference_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                            false, 1, true, false, {}));
                 require(resting == pixels(bitmap.Get(), width, height) &&
-                            renderer.tooltip(20, 20, snapshot, settings).empty(),
-                        "Disabling hover removes overlays and native tooltip content");
+                            !renderer.tooltip(20, 20, snapshot, settings).empty(),
+                        "Tooltip remains available with inline hover numbers disabled");
+                settings.show_tooltips = false;
+                require(renderer.tooltip(20, 20, snapshot, settings).empty(),
+                        "Both hover options can be disabled independently");
                 settings.show_hover_info = true;
                 checked(renderer.render_to(target.Get(), snapshot, settings,
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                            false, 1, true, false, {}));
-                require(resting != pixels(bitmap.Get(), width, height),
-                        "Re-enabling hover restores numeric overlays");
+                const auto inline_only = pixels(bitmap.Get(), width, height);
+                require(resting != inline_only &&
+                            renderer.tooltip(20, 20, snapshot, settings).empty(),
+                        "Inline numbers work with tooltips disabled");
+                settings.show_tooltips = true;
+                checked(renderer.render_to(target.Get(), snapshot, settings,
+                                           (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                                           false, 1, true, false, {}));
+                require(inline_only == pixels(bitmap.Get(), width, height) &&
+                            !renderer.tooltip(20, 20, snapshot, settings).empty(),
+                        "Enabling tooltips does not alter the rendered bar");
             }
         }
         if (!horizontal) {
@@ -1203,7 +1215,8 @@ int wmain(int argc, wchar_t **argv) {
                     const auto ram_box = layout.blocks[1].bounds;
                     const auto tip = loadbar::metric_tooltip(layout, ram_box.x + 1, ram_box.y + 1,
                                                              oversized_capacity, settings, {});
-                    require(tip.find(L"94000.0/126800.0GB 74%") != std::wstring::npos,
+                    require(tip.find(L"94000.0 GB / 126800.0 GB") != std::wstring::npos &&
+                                tip.find(L"74.1%") != std::wstring::npos,
                             "Ellipsized RAM retains full truthful values in the tooltip");
                     checked(
                         renderer.render_to(target.Get(), snapshot, settings,

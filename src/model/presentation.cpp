@@ -97,7 +97,14 @@ std::wstring compact_value(MetricView source) {
     return value < 10 ? std::format(L"{:.1f} {}", value, units[index])
                       : std::format(L"{:.0f} {}", value, units[index]);
 }
-std::wstring peak_text(MetricView metric) {
+std::wstring peak_text(MetricView metric, ByteFormat format) {
+    if (format == ByteFormat::tooltip && metric.session_peak) {
+        MetricView peak;
+        peak.value = *metric.session_peak;
+        peak.status = Status::valid;
+        peak.unit = Unit::bytes_per_second;
+        return L"Linear scale; peak since launch " + metric_text(peak, format);
+    }
     return metric.session_peak
                ? std::format(L"Linear scale; peak since launch {} B/s", *metric.session_peak)
                : L"Linear scale; peak since launch unavailable";

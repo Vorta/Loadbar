@@ -64,11 +64,12 @@ void check_checkbox_background(HWND checkbox) {
 }
 void drive_settings_tests() {
     using namespace loadbar;
-    for (unsigned mask = 0; mask < 8; ++mask) {
+    for (unsigned mask = 0; mask < 16; ++mask) {
         Settings switches;
         switches.cpu_squares = (mask & 1U) != 0;
         switches.show_hover_info = (mask & 2U) != 0;
         switches.open_task_manager_on_click = (mask & 4U) != 0;
+        switches.show_tooltips = (mask & 8U) != 0;
         check(decode_settings(encode_settings(switches)) == switches,
               "All preference combinations round trip");
         check(!collection_changed({}, switches),
@@ -76,12 +77,23 @@ void drive_settings_tests() {
     }
     const auto legacy = decode_settings(L"Loadbar 9 0 40 1000 \"\" \"gpu\" \"nic\" 0 1 1 0 0");
     check(legacy && !legacy->cpu_squares && legacy->show_hover_info &&
-              legacy->open_task_manager_on_click,
+              legacy->open_task_manager_on_click && legacy->show_tooltips,
           "Existing settings receive backward-compatible interaction defaults");
     const auto prefix10 = L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 ";
     for (const auto *tail : {L"", L"0 1", L"2 1 1", L"0 2 1", L"0 1 -1", L"0 1 1 extra"}) {
         check(!decode_settings(std::wstring(prefix10) + tail),
               "Malformed preference fields are rejected");
+    }
+    for (const bool hover : {false, true}) {
+        const auto migrated =
+            decode_settings(std::wstring(prefix10) + (hover ? L"0 1 1" : L"0 0 1"));
+        check(migrated && migrated->show_tooltips == hover && migrated->show_hover_info == hover,
+              "Schema ten preserves the previously combined hover/tooltip choice");
+    }
+    const auto prefix11 = L"Loadbar 11 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 0 1 1 ";
+    for (const auto *tail : {L"", L"2", L"-1", L"true", L"0 extra"}) {
+        check(!decode_settings(std::wstring(prefix11) + tail),
+              "Missing, malformed and trailing tooltip fields are rejected");
     }
     Settings settings;
     check(settings.hidden_disks.empty() && disk_visible(L"new", settings), "New disks are visible");
@@ -100,7 +112,8 @@ void drive_settings_tests() {
     ordered.hidden_disks = {L"a", L"a"};
     check(!valid_settings(ordered), "Duplicate internal exclusions are rejected");
     const auto old = decode_settings(L"Loadbar 8 0 40 1000 \"\" \"gpu\" \"nic\" 0 0 1 0");
-    check(old && old->hidden_disks.empty() && !old->gpu_visible && old->network_visible,
+    check(old && old->show_tooltips && old->hidden_disks.empty() && !old->gpu_visible &&
+              old->network_visible,
           "Schema eight preserves GPU visibility and shows all disks");
     const std::wstring prefix = L"Loadbar 9 0 40 1000 \"\" \"\" \"\" 0 1 1 0 ";
     for (const auto *tail :
@@ -252,7 +265,7 @@ void migration_tests() {
         Settings settings;
         settings.thickness = value;
         check(valid_settings(settings) && decode_settings(encode_settings(settings)) == settings &&
-                  encode_settings(settings).starts_with(L"Loadbar 10 "),
+                  encode_settings(settings).starts_with(L"Loadbar 11 "),
               "Current schema boundaries round trip");
     }
     for (const int version : {1, 2, 3, 4, 5, 6, 7}) {
@@ -287,7 +300,8 @@ void migration_tests() {
                           decoded->monitor_id == L"monitor" && decoded->gpu_id == L"gpu" &&
                           decoded->network_id == L"nic" && decoded->edge == Edge::top &&
                           decoded->alignment ==
-                              (version == 1 ? Alignment::start : Alignment::center),
+                              (version == 1 ? Alignment::start : Alignment::center) &&
+                          decoded->show_tooltips,
                       "Migration preserves choices and normalizes old small/fractional thickness");
             }
         }
@@ -310,7 +324,7 @@ void migration_tests() {
     Settings fractional;
     fractional.thickness = 40.25;
     check(!valid_settings(fractional), "New settings reject fractional DIPs");
-    check(!decode_settings(L"Loadbar 11 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
+    check(!decode_settings(L"Loadbar 12 0 40 1000 \"\" \"\" \"\" 0"), "Reject future schema");
 }
 void draft_tests() {
     using namespace loadbar;
@@ -387,6 +401,10 @@ struct SettingsWindowTests {
                 std::array<std::pair<DWORD, NOTIFYICONDATAW>, 7> requests{};
                 std::size_t count{};
             } tray;
+            struct TooltipCalls {
+                unsigned pops{}, activations{};
+                bool active{};
+            } tooltip_calls;
             Application app(instance);
             app.settings_ = {};
             app.window_ = CreateWindowExW(0, L"Loadbar.Bar", L"", WS_POPUP, 0, 0, 1, 1, nullptr,
@@ -394,6 +412,47 @@ struct SettingsWindowTests {
             if (!app.window_) {
                 throw std::runtime_error("Create hidden owner");
             }
+            app.tooltip_ = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP, 0, 0, 1, 1,
+                                           app.window_, nullptr, instance, nullptr);
+            if (!app.tooltip_) {
+                throw std::runtime_error("Create hidden tooltip");
+            }
+            check(SetWindowSubclass(
+                      app.tooltip_,
+                      [](HWND window, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
+                         DWORD_PTR data) -> LRESULT {
+                          auto &calls = *message_pointer<TooltipCalls *>(data);
+                          if (message == TTM_POP) {
+                              ++calls.pops;
+                          } else if (message == TTM_ACTIVATE) {
+                              ++calls.activations;
+                              calls.active = wparam != 0;
+                          }
+                          return DefSubclassProc(window, message, wparam, lparam);
+                      },
+                      1, reinterpret_cast<DWORD_PTR>(&tooltip_calls)) != FALSE,
+                  "Observe tooltip messages without displaying it");
+            for (const bool hover : {false, true}) {
+                for (const bool tips : {false, true}) {
+                    app.settings_.show_hover_info = hover;
+                    app.settings_.show_tooltips = tips;
+                    const TooltipKey cached{1, 2, 3, false};
+                    app.tooltip_cache_.remember(cached, std::nullopt);
+                    const auto pops = tooltip_calls.pops;
+                    const auto activations = tooltip_calls.activations;
+                    app.update_tooltip_activation();
+                    check(
+                        tooltip_calls.pops == pops + 1 &&
+                            tooltip_calls.activations == activations + 1 &&
+                            tooltip_calls.active == tips &&
+                            !app.tooltip_cache_.fresh(cached, Clock::now()),
+                        "Tooltip activation follows its own setting and clears stale popup/cache");
+                    check(!IsWindowVisible(app.tooltip_), "Tooltip test stays offscreen");
+                }
+            }
+            DestroyWindow(app.tooltip_);
+            app.tooltip_ = nullptr;
+            app.settings_ = {};
             unsigned launches{};
             check(SetPropW(app.window_, L"Loadbar.TestLaunch", &launches) != FALSE,
                   "Install click probe");
@@ -517,7 +576,7 @@ struct SettingsWindowTests {
             check(label_colors, "Every label uses transparent text on system window background");
             SendMessageW(app.settings_window_, WM_SYSCOLORCHANGE, 0, 0);
             SendMessageW(app.settings_window_, WM_THEMECHANGED, 0, 0);
-            for (const int id : {kCpuSquares, kHoverInfo, kTaskManagerClick}) {
+            for (const int id : {kCpuSquares, kHoverInfo, kTooltips, kTaskManagerClick}) {
                 const auto box = GetDlgItem(app.settings_content_, id);
                 check(box != nullptr, "Preference checkbox exists");
                 for (const auto state : {BST_UNCHECKED, BST_CHECKED}) {
@@ -539,7 +598,8 @@ struct SettingsWindowTests {
                 const auto draft = settings_from_draft(app.settings_draft());
                 check(draft && (id != kCpuSquares || draft->cpu_squares) &&
                           (id != kHoverInfo || !draft->show_hover_info) &&
-                          (id != kTaskManagerClick || !draft->open_task_manager_on_click),
+                          (id != kTaskManagerClick || !draft->open_task_manager_on_click) &&
+                          (id != kTooltips || !draft->show_tooltips),
                       "Checkbox value survives draft conversion");
                 app.populate_devices(false);
                 check(settings_from_draft(app.settings_draft()) == draft,
@@ -548,6 +608,13 @@ struct SettingsWindowTests {
                 check(SendMessageW(box, BM_GETCHECK, 0, 0) == initial && !enabled(kApplySettings),
                       "Cancel restores preference and dirty state");
             }
+            check(GetNextDlgTabItem(app.settings_window_,
+                                    GetDlgItem(app.settings_content_, kHoverInfo),
+                                    FALSE) == GetDlgItem(app.settings_content_, kTooltips) &&
+                      GetNextDlgTabItem(app.settings_window_,
+                                        GetDlgItem(app.settings_content_, kTooltips), FALSE) ==
+                          GetDlgItem(app.settings_content_, kTaskManagerClick),
+                  "Tooltip checkbox follows hover info in native keyboard order");
             // Real EN_CHANGE travels through the content host to the Settings callback.
             SetWindowTextW(field(4), L"60");
             check(enabled(kApplySettings) && enabled(kCancelSettings),

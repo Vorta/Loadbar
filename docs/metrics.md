@@ -163,7 +163,13 @@ Every disk read/write direction and selected interface upload/download direction
 maximum valid observation since this process started. Fill is `clamp(current / peak, 0, 1)`;
 zero is empty, a first positive observation fills the bar, and half the peak fills half.
 There is no logarithmic floor, decay, rolling window, reference ceiling, or guessed capacity.
-Tooltips and accessible readings expose each peak in B/s; percentages retain fixed 0–100% scales.
+Tooltips show each peak in MB/s or GB/s; Settings retains the detailed B/s value. Percentages
+retain fixed 0–100% scales. All popup byte quantities, including RAM/GPU used and total capacity,
+use one decimal in MB or GB (divide by 1024 squared/cubed, switching at 1 GB). The popup labels
+these as Windows-style binary units. Zero is `0.0 MB` (or `MB/s`); positive values below 0.1 MB
+are `<0.1 MB` (or `MB/s`). Raw byte-count capacity lines are omitted. This formatting changes
+neither measurements nor peaks, scopes, statuses or retained-observation ages. Inline and Settings
+formatting are unchanged.
 
 `SessionPeaks` is owned by Application and exclusively accessed by the single sampling worker.
 Collector updates it before latest-value publication, so a coalesced-away high sample still

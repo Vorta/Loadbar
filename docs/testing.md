@@ -1,5 +1,96 @@
 # Testing and verification
 
+## 1.1.5 publication build
+
+On 2026-10-09, `pwsh -NoProfile -File scripts/package-release.ps1` built version 1.1.5,
+passed all four Release CTest suites (3.87 s), and verified the single-entry ZIP against
+the tested executable. Debug, RelWithDebInfo and ASan were reconfigured/rebuilt with the
+release version and passed 4/4 suites each (10.41 s, 4.35 s and 14.54 s respectively).
+Formatting and MSVC analysis passed. Clang-tidy evidence for the unchanged implementation
+is recorded below; release preparation changed version metadata and documentation only.
+
+```powershell
+pwsh -NoProfile -File scripts/package-release.ps1
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check analyze
+dumpbin /dependents out/release/1.1.5/Loadbar.exe
+dumpbin /headers out/release/1.1.5/Loadbar.exe
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+Package hashes and import/header inspection are in [packaging.md](packaging.md). The owner
+approved the tooltip changes after manual use. The detailed interactive matrix, hardware
+accuracy, controlled performance/soak and clean-machine execution remain pending.
+
+## Independent tooltips and compact quantities (1.1.5)
+
+Implemented on 2026-10-09. Model tests cover one-decimal MB/GB formatting for capacities,
+rates and peaks, zero versus tiny positive readings, unit boundaries, invalid values,
+warm-up, failures and retained observations. RAM/GPU popup tests keep matching capacities
+and scope. Ordinary inline/Settings formats remain unchanged.
+
+Settings tests exercise all 16 combinations of four preference flags, schema 1–10 migration,
+schema 11 validation, checkbox draft/cancellation, background pixels, keyboard order and
+responsive layout. A hidden native tooltip records pop/activation requests for all four
+inline/popup combinations and verifies cache invalidation. Offscreen rendering tests verify
+that tooltip enablement does not alter pixels and that inline-only and tooltip-only modes work.
+Existing cache tests cover sample/layout changes and retention-deadline expiry.
+
+Commands run from the pinned developer environment:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+foreach ($preset in @('windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check tidy analyze
+cmake --build out/build/windows-x64-debug/analyze
+cmake --build --preset windows-x64-debug --target format-check analyze
+clang-tidy -p out/build/windows-x64-debug/tidy-commands src/model/model.cpp tests/metrics_upgrade.cpp tests/settings_window.cpp
+clang-tidy -p out/build/windows-x64-debug/tidy-commands tests/settings_window.cpp
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --build --preset $preset
+    ctest --preset $preset -R loadbar-unit --output-on-failure
+}
+foreach ($preset in @('windows-x64-debug', 'windows-x64-release', 'windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --build --preset $preset
+    ctest --preset $preset -R loadbar-settings --output-on-failure
+}
+dumpbin /dependents out/build/windows-x64-release/Loadbar.exe
+dumpbin /headers out/build/windows-x64-release/Loadbar.exe
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+All four configurations passed all four CTest suites. Formatting and MSVC analysis passed.
+A full clang-tidy scan found one callback conversion in the new test; using the existing Win32
+pointer-conversion helper resolved it. The targeted follow-up passed. A null-handle diagnostic
+in that test was fixed with an explicit failure branch. Final affected unit/Settings reruns
+passed in all four configurations, including signed-zero formatting and checkbox keyboard order.
+Release dependency/header inspection found only Windows imports, x64, CFG, ASLR, DEP,
+high-entropy VA and an empty delay-import directory. No explicit dynamic loads were found.
+The owner subsequently reported that the changes look good and requested release as 1.1.5.
+
+Pending manual checks: open Settings and try each inline/popup combination with Apply;
+Cancel/Close should discard unapplied changes. Confirm Show tooltips is below Show info on
+hover, blends into the window background and remains reachable at narrow sizes and higher
+DPI/text scale. Hover RAM, GPU, each disk and network: expect compact units, zero/tiny-positive
+distinction, current device/scope/status and no raw capacity/peak byte counts. With inline
+numbers off and tooltips on, check the 800 ms popup delay, sample changes and retained-age
+refresh while stationary. With tooltips off, confirm the tray tooltip is still available.
+Restart to verify persistence. The tests did not launch an AppBar, write real settings or
+alter the desktop; live behavior and fresh production performance remain unverified.
+
 ## Settings checkbox backgrounds and Close controls (1.1.4)
 
 On 2026-10-09, the final 1.1.4 builds passed all four CTest suites in Debug (8.76 s),

@@ -80,10 +80,10 @@ Centralize these defaults; do not promote them into additional user requirements
 | Thickness | Default 40 DIPs; validate whole-number input from 40–640 DIPs, increasing to the readable minimum for topology/orientation/text scale; DIPs are the only sizing unit; migrate saved percentage sizes. |
 | Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings, with graphics-only rest. |
 | Disk mode | Active time with smaller read/write throughput bars. Keep IOPS feasible without implementing it speculatively. |
-| Rate units | B/s, KiB/s, MiB/s, GiB/s; adapt units without confusing bytes/bits or binary/decimal scaling. |
+| Rate units | Inline/Settings use B/s, KiB/s, MiB/s, GiB/s. Popup tooltips use one-decimal MB/GB (MB/s or GB/s for rates), explicitly Windows-style binary units; tiny positive values below 0.1 MB use <0.1, while zero stays zero. |
 | Controls | Notification-area menu for selection, placement, settings, and exit; no autohide by default. |
 | Startup | No launch-at-sign-in registration unless explicitly requested. |
-| Interaction | Show info on hover and Open Task Manager on click are checked by default; disabling hover removes overlays and the bar tooltip, retaining Settings readings and the tray tooltip. |
+| Interaction | Show info on hover, Show tooltips and Open Task Manager on click are checked by default. Show info on hover controls inline numbers; Show tooltips independently controls the bar popup. Settings readings and the tray tooltip remain available. Older settings migrate the tooltip choice from hover info. |
 | CPU shape | Display CPU usage always as squares is unchecked by default; checked mode retains P/E class sizes with 14/6-DIP square sides. |
 
 Never sum physical disks or silently select only one for display. Remember explicitly hidden disks
@@ -332,8 +332,9 @@ by default. Link speed is metadata, never an end-to-end capacity claim or the ra
   inline hover text top-down on Right and bottom-up on Left; native tooltips stay upright.
   Visible non-CPU graphics divide the remaining height equally.
 - Reflow the same visible metrics for horizontal/vertical bars. Enforce a documented compact
-  layout/minimum readable size rather than silently hiding processors. Provide exact
-  values and statuses in accessible text/tooltips when inline numbers do not fit.
+  layout/minimum readable size rather than silently hiding processors. Provide complete
+  readings and statuses in accessible text/tooltips when inline numbers do not fit; popup
+  byte quantities follow the compact unit policy above.
 - Respect DPI, text scaling, high contrast, and keyboard access. Static high-use glows from
   the approved design are allowed; avoid flashing, animation, and per-sample accessibility-tree rebuilds/event floods.
 - Start with an opaque Direct2D HWND render target. Cache brushes, formats, text layouts,

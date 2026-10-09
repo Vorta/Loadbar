@@ -652,7 +652,8 @@ std::wstring metric_tooltip(const Layout &l, float x, float y, const Snapshot &s
                       ? std::format(L"; efficiency class {}", *cpu.efficiency_class)
                       : L"; class unknown";
         result += std::format(L"\nGroup {}, logical processor {}: {} [{}] {}", cpu.id.group,
-                              cpu.id.number, metric_text(m), status_text(m.status), m.detail);
+                              cpu.id.number, metric_text(m, ByteFormat::tooltip),
+                              status_text(m.status), m.detail);
         return result;
     }
     for (const auto &b : l.blocks) {
@@ -667,36 +668,36 @@ std::wstring metric_tooltip(const Layout &l, float x, float y, const Snapshot &s
                                                             ? L"Physical disk discovery"
                                                             : L"No physical disk discovered"))
                           : s.network_label;
+        bool byte_values{};
         for (auto g : b.types) {
             if (g == Gauge::count) {
                 break;
             }
             const auto m = aged_metric(block_metric(b, g, s), now, settings.interval_ms);
-            result += std::format(L"\n{}: {} [{}] {}",
-                                  g == Gauge::gpu_memory ? s.gpu_memory_label : gauge_name(g),
-                                  metric_text(m), status_text(m.status), m.detail);
+            result += std::format(
+                L"\n{}: {} [{}] {}", g == Gauge::gpu_memory ? s.gpu_memory_label : gauge_name(g),
+                metric_text(m, ByteFormat::tooltip), status_text(m.status), m.detail);
             if (is_rate_gauge(g)) {
-                result += L"\n" + peak_text(m);
+                result += L"\n" + peak_text(m, ByteFormat::tooltip);
             }
-            if (g == Gauge::ram) {
-                result += L"\n" + ram_summary(s, now, settings.interval_ms) +
-                          L"; RAM GB = 1,073,741,824 bytes";
-                const auto bytes =
-                    presented_metric(aged_metric(s.ram_used_bytes, now, settings.interval_ms));
+            if (g == Gauge::ram || g == Gauge::gpu_memory) {
+                const auto bytes = presented_metric(
+                    aged_metric(g == Gauge::ram ? s.ram_used_bytes : s.gpu_memory_bytes, now,
+                                settings.interval_ms));
+                const auto capacity = g == Gauge::ram ? s.ram_total_bytes : s.gpu_memory_capacity;
                 if (presented_metric(m).status == Status::valid && bytes.status == Status::valid &&
-                    s.ram_total_bytes > 0) {
-                    result += std::format(L"\n{:.0f} / {} bytes", bytes.value, s.ram_total_bytes);
+                    capacity > 0 && bytes.value <= static_cast<double>(capacity)) {
+                    auto total = bytes;
+                    total.value = static_cast<double>(capacity);
+                    result += L"\n" + metric_text(bytes, ByteFormat::tooltip) + L" / " +
+                              metric_text(total, ByteFormat::tooltip);
+                    byte_values = true;
                 }
             }
-            if (g == Gauge::gpu_memory) {
-                const auto bytes =
-                    presented_metric(aged_metric(s.gpu_memory_bytes, now, settings.interval_ms));
-                if (presented_metric(m).status == Status::valid && bytes.status == Status::valid &&
-                    s.gpu_memory_capacity > 0) {
-                    result +=
-                        std::format(L"\n{:.0f} / {} bytes", bytes.value, s.gpu_memory_capacity);
-                }
-            }
+            byte_values = byte_values || is_rate_gauge(g);
+        }
+        if (byte_values) {
+            result += L"\nMB/GB: Windows-style binary units (1024-based)";
         }
         return result;
     }

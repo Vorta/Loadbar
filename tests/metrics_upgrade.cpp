@@ -23,6 +23,90 @@ Metric rate(double value, std::wstring id, int second, Status status = Status::v
         value, status, Unit::bytes_per_second, Clock::time_point{} + std::chrono::seconds(second),
         1s,    {},     std::move(id)};
 }
+void tooltip_format_tests() {
+    constexpr double mb = 1048576.0, gb = 1073741824.0;
+    for (const auto unit : {Unit::bytes, Unit::bytes_per_second}) {
+        const std::wstring suffix = unit == Unit::bytes ? L"" : L"/s";
+        for (const auto &[value, expected] : {std::pair{0.0, L"0.0 MB"},
+                                              {-0.0, L"0.0 MB"},
+                                              {1.0, L"<0.1 MB"},
+                                              {0.099 * mb, L"<0.1 MB"},
+                                              {0.1 * mb, L"0.1 MB"},
+                                              {512 * mb, L"512.0 MB"},
+                                              {1023.9 * mb, L"1023.9 MB"},
+                                              {gb, L"1.0 GB"},
+                                              {8 * gb, L"8.0 GB"},
+                                              {2048 * gb, L"2048.0 GB"}}) {
+            Metric m{value, Status::valid, unit, {}, {}, {}};
+            require(metric_text(m, ByteFormat::tooltip) == expected + suffix,
+                    "Tooltip uses compact binary MB/GB without hiding small positive values");
+        }
+        for (const auto value : {-1.0, std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+            Metric m{value, Status::valid, unit, {}, {}, {}};
+            require(metric_text(m, ByteFormat::tooltip) == L"Error",
+                    "Invalid tooltip quantity is never shown as a valid zero");
+        }
+        Metric m{0, Status::warming_up, unit, {}, {}, {}};
+        require(metric_text(m, ByteFormat::tooltip).starts_with(L"0.0 MB" + suffix),
+                "Initial warmup uses compact zero with raw status retained");
+        for (const auto status : {Status::unavailable, Status::error, Status::stale}) {
+            m.status = status;
+            require(metric_text(m, ByteFormat::tooltip) == status_text(status),
+                    "Never-observed failures keep their status");
+            m.retained = ObservedValue{512 * mb, Clock::now() - 10s};
+            const auto text = metric_text(m, ByteFormat::tooltip);
+            require(text.starts_with(L"512.0 MB" + suffix) &&
+                        text.find(status_text(status)) != std::wstring::npos &&
+                        text.find(L"Last valid reading;") != std::wstring::npos,
+                    "Retained tooltip quantity preserves status and observation age");
+            m.retained.reset();
+        }
+    }
+    auto m = rate(mb, L"test", 1);
+    require(metric_text(m) == L"1.0 MiB/s" && compact_value(m) == L"1.0 MiB/s",
+            "Non-tooltip rate formatting is unchanged");
+    m.session_peak = 8 * gb;
+    require(peak_text(m, ByteFormat::tooltip) == L"Linear scale; peak since launch 8.0 GB/s",
+            "Session peaks use the same compact rate convention");
+    m.session_peak = 1;
+    require(peak_text(m, ByteFormat::tooltip).ends_with(L"<0.1 MB/s"), "Tiny peak stays positive");
+    m.session_peak = 0;
+    require(peak_text(m, ByteFormat::tooltip).ends_with(L"0.0 MB/s"), "Zero peak stays zero");
+    m.session_peak.reset();
+    require(peak_text(m, ByteFormat::tooltip).ends_with(L"unavailable"),
+            "Missing peak stays absent");
+
+    Snapshot s;
+    s.gpu_label = L"Fixture GPU";
+    s.gpu_memory_label = L"Shared memory";
+    s.gpu_memory_capacity = static_cast<std::uint64_t>(8 * gb);
+    s.gpu_memory_bytes = {512 * mb, Status::valid, Unit::bytes, {}, {}, {}};
+    s.gauges[3] = {6.25, Status::valid, Unit::percent, {}, {}, {}};
+    s.network_label = L"Fixture NIC";
+    s.gauges[4] = s.gauges[5] = rate(mb, L"nic", 0);
+    s.gauges[4].session_peak = s.gauges[5].session_peak = 8 * gb;
+    s.disks.push_back({L"disk", L"Fixture disk", s.gauges[4], s.gauges[5]});
+    const auto layout = make_snapshot_layout(1920, 60, Edge::top, s, 1, {});
+    for (const auto &block : layout.blocks) {
+        if (block.kind < 2) {
+            continue;
+        }
+        const auto tip = metric_tooltip(layout, block.bounds.x + 1, block.bounds.y + 1, s, {}, {});
+        require(tip.find(L"1024-based") != std::wstring::npos &&
+                    tip.find(L"bytes") == std::wstring::npos,
+                "Every byte-based device tooltip explains its compact units");
+        if (block.kind == 2) {
+            require(tip.find(L"Shared memory") != std::wstring::npos &&
+                        tip.find(L"512.0 MB / 8.0 GB") != std::wstring::npos,
+                    "GPU tooltip preserves selected memory scope and matching capacity");
+        } else {
+            require(tip.find(L"1.0 MB/s") != std::wstring::npos &&
+                        tip.find(L"peak since launch 8.0 GB/s") != std::wstring::npos,
+                    "Disk/network tooltips compact both current rates and peaks");
+        }
+    }
+}
 void memory_tests() {
     Snapshot snapshot;
     constexpr auto gib = 1073741824ULL;
@@ -44,8 +128,9 @@ void memory_tests() {
     const auto layout = make_layout(1920, 40, loadbar::Edge::top, {}, 1);
     const auto box = layout.blocks[1].bounds;
     const auto tip = metric_tooltip(layout, box.x + 1, box.y + 1, snapshot, {}, {});
-    require(tip.find(L"47.0/63.4GB 74%") != std::wstring::npos &&
-                tip.find(L"1,073,741,824 bytes") != std::wstring::npos,
+    require(tip.find(L"47.0 GB / 63.4 GB") != std::wstring::npos &&
+                tip.find(L"1024-based") != std::wstring::npos &&
+                tip.find(L"bytes") == std::wstring::npos,
             "RAM tooltip states binary GB");
     require(expire_snapshot(snapshot, Clock::time_point{} + 4s, 1000) &&
                 snapshot.gauges[0].status == Status::stale &&
@@ -248,9 +333,9 @@ void migration_tests() {
                     migrated->alignment == Alignment::end && migrated->gpu_id == L"gpu" &&
                     migrated->network_id == L"nic",
                 "Legacy scale retirement retains placement/devices/appearance");
-        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 10 ") &&
+        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 11 ") &&
                     decode_settings(encode_settings(*migrated)) == migrated,
-                "Migrated choices round trip in v10 without persisted peaks");
+                "Migrated choices round trip in v11 without persisted peaks");
     }
     for (const auto *malformed :
          {L"Loadbar 4 0 40 1000 \"\" \"\" \"\" 0 2 0 0",
@@ -262,6 +347,7 @@ void migration_tests() {
 }
 } // namespace
 void run_metric_upgrade_tests() {
+    tooltip_format_tests();
     memory_tests();
     disk_tests();
     peak_tests();

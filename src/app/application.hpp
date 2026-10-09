@@ -45,6 +45,7 @@ class Application {
     void update_details();
     void update_settings_status();
     void update_tooltip();
+    void update_tooltip_activation();
     void schedule_refresh();
     void reconfigure_worker(bool reset = true);
     void sampling_failed(std::optional<Delivery> update);

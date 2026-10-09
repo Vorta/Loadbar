@@ -32,6 +32,7 @@ std::optional<Settings> settings_from_draft(const SettingsDraft &draft) {
     result.hidden_disks = draft.hidden_disks;
     result.cpu_squares = draft.cpu_squares;
     result.show_hover_info = draft.show_hover_info;
+    result.show_tooltips = draft.show_tooltips;
     result.open_task_manager_on_click = draft.open_task_manager_on_click;
     result.edge = static_cast<Edge>(draft.edge);
     result.alignment = static_cast<Alignment>(draft.alignment);
@@ -148,7 +149,8 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
         result.preferences[i] = {margin, preference_y + static_cast<int>(i) * preference_height,
                                  std::max(1, content_width - 2 * margin), preference_height};
     }
-    const int form_bottom = preference_y + 3 * preference_height + gap;
+    const int form_bottom =
+        preference_y + static_cast<int>(result.preferences.size()) * preference_height + gap;
     const int table_width = std::max(1, content_width - 2 * margin);
     result.readings_label = {margin, form_bottom, table_width, px(stacked ? 42 : 26)};
     const int table_y = result.readings_label.y + result.readings_label.height;

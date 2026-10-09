@@ -85,7 +85,7 @@ int Application::run() {
         tool.lpszText = tooltip_text_.data();
         SendMessageW(tooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
         SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 600);
-        SendMessageW(tooltip_, TTM_ACTIVATE, settings_.show_hover_info, 0);
+        update_tooltip_activation();
         SendMessageW(tooltip_, TTM_SETDELAYTIME, TTDT_INITIAL, 800);
         SendMessageW(tooltip_, TTM_SETDELAYTIME, TTDT_RESHOW, 800);
     }
@@ -226,8 +226,15 @@ void Application::remove_tray() noexcept {
         tray_added_ = false;
     }
 }
+void Application::update_tooltip_activation() {
+    if (tooltip_) {
+        SendMessageW(tooltip_, TTM_POP, 0, 0);
+        SendMessageW(tooltip_, TTM_ACTIVATE, settings_.show_tooltips, 0);
+    }
+    tooltip_cache_ = {};
+}
 void Application::update_tooltip() {
-    if (!tooltip_ || !window_ || !settings_.show_hover_info) {
+    if (!tooltip_ || !window_ || !settings_.show_tooltips) {
         return;
     }
     POINT point{};
@@ -282,7 +289,7 @@ void Application::schedule_refresh() {
     // Age text needs ticks only while it can be read. Valid sampling needs no independent
     // periodic UI wakeups; each accepted sample moves the stale deadline forward.
     if (!paused_ &&
-        ((settings_.show_hover_info && hovered_ && IsWindowVisible(window_)) ||
+        ((settings_.show_tooltips && hovered_ && IsWindowVisible(window_)) ||
          (settings_window_ && IsWindowVisible(settings_window_) && !IsIconic(settings_window_)))) {
         const auto age = next_retention_deadline(snapshot_, now, settings_.interval_ms, settings_);
         if (age && (!deadline || *age < *deadline)) {
@@ -409,7 +416,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             const int id = GetDlgCtrlID(message_pointer<HWND>(lparam));
             if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus ||
                 id == kDrivesLabel || id == kCpuSquares || id == kHoverInfo ||
-                id == kTaskManagerClick) {
+                id == kTaskManagerClick || id == kTooltips) {
                 const auto dc = message_pointer<HDC>(wparam);
                 const auto color = IsWindowEnabled(message_pointer<HWND>(lparam)) ? COLOR_WINDOWTEXT
                                                                                   : COLOR_GRAYTEXT;
@@ -454,7 +461,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             return 0;
         }
         if (window == settings_window_ && lparam != 0 && command >= kCpuSquares &&
-            command <= kTaskManagerClick) {
+            command <= kTooltips) {
             update_settings_actions();
             return 0;
         }

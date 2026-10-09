@@ -6,6 +6,15 @@ configuration; the prescribed 1 Hz performance gate remains pending. Automated t
 and offscreen probes do not establish production overhead. See
 [AGENTS.md](../AGENTS.md#performance-gate) for the targets and required conditions.
 
+## Independent tooltip controls (1.1.5)
+
+The new tooltip preference is presentation-only and does not restart providers. Disabled
+popups return before cursor queries/text formatting. Enabled popups retain the existing
+observation/layout/deadline cache; popup age refresh no longer depends on inline numbers.
+No new worker, timer, periodic I/O or sample history was introduced. Settings adds one native
+checkbox owned by the existing parent window. These are inspected code properties; no new
+production CPU/RAM/GPU or lifetime measurement was performed.
+
 ## 1.1.4 Settings review
 
 A separate performance subagent found no actionable resource or hot-path regression on

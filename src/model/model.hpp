@@ -68,7 +68,9 @@ class Rate {
 };
 [[nodiscard]] double fill_fraction(double value, double ceiling) noexcept;
 [[nodiscard]] std::wstring status_text(Status status);
-[[nodiscard]] std::wstring metric_text(MetricView metric);
+enum class ByteFormat : std::uint8_t { adaptive_binary, tooltip };
+[[nodiscard]] std::wstring metric_text(MetricView metric,
+                                       ByteFormat format = ByteFormat::adaptive_binary);
 // A disposable rendering view. The source metric retains its actual provider status.
 [[nodiscard]] MetricView presented_metric(MetricView metric) noexcept;
 [[nodiscard]] std::wstring retention_text(MetricView metric, Clock::time_point now);
