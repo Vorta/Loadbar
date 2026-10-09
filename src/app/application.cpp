@@ -405,12 +405,16 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
         return DefWindowProcW(window, message_id, wparam, lparam);
     }
     if (window == settings_content_ || window == settings_window_) {
-        if (message_id == WM_CTLCOLORSTATIC) {
+        if (message_id == WM_CTLCOLORSTATIC || message_id == WM_CTLCOLORBTN) {
             const int id = GetDlgCtrlID(message_pointer<HWND>(lparam));
             if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus ||
-                id == kDrivesLabel) {
+                id == kDrivesLabel || id == kCpuSquares || id == kHoverInfo ||
+                id == kTaskManagerClick) {
                 const auto dc = message_pointer<HDC>(wparam);
-                if (SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT)) != CLR_INVALID &&
+                const auto color = IsWindowEnabled(message_pointer<HWND>(lparam)) ? COLOR_WINDOWTEXT
+                                                                                  : COLOR_GRAYTEXT;
+                if (SetTextColor(dc, GetSysColor(color)) != CLR_INVALID &&
+                    SetBkColor(dc, GetSysColor(COLOR_WINDOW)) != CLR_INVALID &&
                     SetBkMode(dc, TRANSPARENT) != 0) {
                     return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
                 }
@@ -458,6 +462,12 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             if (settings_dirty_) {
                 apply_settings();
             }
+            return 0;
+        }
+        if (window == settings_window_ && command == kCloseSettings) {
+            cancel_settings();
+            ShowWindow(settings_window_, SW_HIDE);
+            schedule_refresh();
             return 0;
         }
         if (window == settings_window_ && command == IDCANCEL) {

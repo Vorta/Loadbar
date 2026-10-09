@@ -77,8 +77,12 @@ Settings uses native controls, a scrollable content host and a readings ListView
 available space. A native checkbox ListView between Network and Edge shows detected physical
 drives, up to four rows before scrolling. Refreshes preserve draft exclusions, focus and scroll
 identity; new drives are checked. The checklist participates in Apply/Cancel and keyboard order.
-Labels stack on narrow windows. The right-aligned footer wraps, or joins the
-scrolling content when it cannot fit. Keyboard traversal follows control order in either mode.
+Labels and preference checkboxes use the surrounding system window background; checkbox
+text backgrounds are transparent and native state/focus drawing is preserved. Labels stack
+on narrow windows. Exit Loadbar sits at the left of the footer, with Apply, Cancel,
+conditional Retry and Close at the right. When space is constrained, Exit Loadbar gets its
+own left-aligned row and the Settings actions wrap, or join the scrolling content. Keyboard
+traversal follows visual action order in either mode.
 DPI/text scale changes control sizing; ordinary resizing only changes layout and table columns.
 
 Apply is enabled for a changed draft and validates it before committing; Cancel restores
@@ -86,7 +90,10 @@ committed values. Placement
 failure retains the draft. Tray changes refresh a clean form and preserve edits. Actionable
 footer messages cover placement, sampling, tray, rendering, persistence and monitor fallback.
 Retry appears only for recoverable infrastructure failures; individual counters retry themselves.
-Closing Settings normally leaves monitoring active, but exits if the tray path is unavailable.
+The Close button discards unapplied edits and hides Settings without stopping monitoring,
+even if the tray icon is unavailable. Exit Loadbar retains its full label in compact layouts
+and shuts down the application. Title-bar close/Escape retain the existing recovery policy:
+they normally leave monitoring active, but exit if the tray path is unavailable.
 
 ## Rendering and resources
 

@@ -8,6 +8,7 @@ namespace loadbar {
 }
 inline constexpr int kApplySettings = 110;
 inline constexpr int kCancelSettings = 111;
+inline constexpr int kCloseSettings = 112;
 inline constexpr int kFirstField = 1000;
 inline constexpr int kFooterStatus = 1020;
 inline constexpr int kDetailsControl = 1021;

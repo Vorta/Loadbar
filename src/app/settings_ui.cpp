@@ -105,14 +105,16 @@ void Application::create_settings() {
         const auto status =
             child(settings_window_, instance_, L"STATIC", L"", SS_NOPREFIX, kFooterStatus);
         ShowWindow(status, SW_HIDE);
+        child(settings_window_, instance_, L"BUTTON", L"Exit &Loadbar",
+              WS_TABSTOP | BS_NOTIFY | BS_MULTILINE, 100);
         child(settings_window_, instance_, L"BUTTON", L"&Apply",
               WS_TABSTOP | BS_DEFPUSHBUTTON | BS_NOTIFY | BS_MULTILINE, kApplySettings);
         child(settings_window_, instance_, L"BUTTON", L"&Cancel",
               WS_TABSTOP | BS_NOTIFY | BS_MULTILINE, kCancelSettings);
         child(settings_window_, instance_, L"BUTTON", L"&Retry monitoring",
               WS_TABSTOP | BS_NOTIFY | BS_MULTILINE, 102);
-        child(settings_window_, instance_, L"BUTTON", L"E&xit Loadbar",
-              WS_TABSTOP | BS_NOTIFY | BS_MULTILINE, 100);
+        child(settings_window_, instance_, L"BUTTON", L"Cl&ose",
+              WS_TABSTOP | BS_NOTIFY | BS_MULTILINE, kCloseSettings);
         child(settings_content_, instance_, L"STATIC",
               L"Current readings — keyboard and screen-reader accessible", 0, kFirstLabel + 7);
         const auto list =
@@ -438,7 +440,8 @@ void Application::layout_settings() {
                         std::max(1, ListView_GetItemCount(drives)), drive_row_height);
     scroll_ = layout.scroll;
     const auto footer_parent = layout.scroll_footer ? settings_content_ : settings_window_;
-    for (const auto id : {kFooterStatus, kApplySettings, kCancelSettings, 102, 100}) {
+    for (const auto id :
+         {kFooterStatus, 100, kApplySettings, kCancelSettings, 102, kCloseSettings}) {
         const auto control = settings_control(id);
         if (GetParent(control) != footer_parent) {
             if (!SetParent(control, footer_parent)) {
@@ -446,7 +449,7 @@ void Application::layout_settings() {
                 throw std::runtime_error(std::format("Settings footer parent failed: {}", error));
             }
             // SetParent inserts at the top of the new sibling order. Append in form order
-            // so native Tab traversal remains readings, Apply, Cancel, Retry, Exit.
+            // so native Tab traversal remains readings, Exit Loadbar, Apply, Cancel, Retry, Close.
             if (!SetWindowPos(control, HWND_BOTTOM, 0, 0, 0, 0,
                               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) {
                 const auto error = GetLastError();
@@ -461,8 +464,6 @@ void Application::layout_settings() {
             SendMessageW(control, WM_UPDATEUISTATE, MAKEWPARAM(UIS_CLEAR, state_mask & ~state), 0);
             if (id == 102) {
                 SetWindowTextW(control, layout.scroll_footer ? L"&Retry" : L"&Retry monitoring");
-            } else if (id == 100) {
-                SetWindowTextW(control, layout.scroll_footer ? L"E&xit" : L"E&xit Loadbar");
             }
         }
     }
@@ -501,7 +502,7 @@ void Application::layout_settings() {
     position(GetDlgItem(settings_content_, kFirstLabel + 7), layout.readings_label);
     const auto list = GetDlgItem(settings_content_, kDetailsControl);
     position(list, layout.readings);
-    constexpr std::array ids{kApplySettings, kCancelSettings, 102, 100};
+    constexpr std::array ids{kApplySettings, kCancelSettings, 102, 100, kCloseSettings};
     for (std::size_t i = 0; i < ids.size(); ++i) {
         if (i != 2 || retry_visible_) {
             position(settings_control(ids[i]), layout.buttons[i]);

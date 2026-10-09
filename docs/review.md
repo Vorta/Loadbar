@@ -4,6 +4,17 @@ Independent adversarial and optimization reviews informed the implementation bef
 initial 1.0.0 commit. Findings were fixed with regression coverage; final implementation
 and release-preparation rounds each ended with two independent consecutive clean reviews.
 
+## 1.1.4 Settings review
+
+On 2026-10-09, separate adversarial and performance subagents reviewed the final pending
+Settings implementation, including the Close rename, and found no actionable issues.
+The adversarial review covered checkbox painting, draft cancellation, Close versus shutdown,
+tray-unavailable behavior, notification filtering, mnemonics, footer wrapping/reparenting,
+keyboard order and regression coverage. The performance review checked GDI/USER ownership,
+event-driven layout, hidden Settings scheduling and unchanged collection/render hot paths.
+Both were read-only source reviews; builds and tests were run separately as recorded in
+[testing.md](testing.md). Neither review establishes live behavior or measured overhead.
+
 ## Logical-processor/performance update
 
 Two independent consecutive adversarial/performance reviews found no actionable issues in

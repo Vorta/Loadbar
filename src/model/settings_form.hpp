@@ -33,7 +33,8 @@ struct ControlBounds {
 struct SettingsLayout {
     ControlBounds viewport;
     std::array<ControlBounds, 7> labels, fields;
-    std::array<ControlBounds, 4> buttons;
+    // Apply, Cancel, Retry, Exit Loadbar, Close Settings.
+    std::array<ControlBounds, 5> buttons;
     std::array<ControlBounds, 3> preferences;
     ControlBounds footer_status, readings_label, readings, drives_label, drives;
     int content_height{}, scroll{}, metric_width{};

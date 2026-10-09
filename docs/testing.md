@@ -1,5 +1,69 @@
 # Testing and verification
 
+## Settings checkbox backgrounds and Close controls (1.1.4)
+
+On 2026-10-09, the final 1.1.4 builds passed all four CTest suites in Debug (8.76 s),
+Release (5.25 s), RelWithDebInfo (3.28 s) and ASan (15.08 s). The hidden Settings tests
+paint each preference checkbox into a DIB using `WM_PRINTCLIENT`, verify that empty pixels
+match `COLOR_WINDOW`, and repeat for checked, unchecked, disabled and theme-reset states.
+No screenshot, AppBar, collector or registry write is needed for these tests.
+
+Footer tests cover separate left/right action groups, non-overlap, narrow/scrolling layouts,
+DPI/text scaling, native forward/reverse Tab order, and conditional Retry. Close discards the
+draft without setting application shutdown or destroying the bar, both with and without a
+tray icon and from a reparented scrolling footer. Exit Loadbar retains its full label.
+
+Commands run from the pinned developer environment:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release
+ctest --preset windows-x64-release --output-on-failure
+cmake --build --preset windows-x64-debug --target format-check tidy analyze
+cmake --build out/build/windows-x64-debug/analyze
+cmake --build --preset windows-x64-debug --target format-check analyze
+git -c core.safecrlf=false diff --check
+```
+
+MSVC analysis initially could not prove the test helper's bitmap handle was non-null after
+its generic test assertion. An explicit failure branch resolved the diagnostic; the analysis
+rebuild passed without suppression. Full clang-tidy completed without actionable diagnostics.
+The final format/analysis rerun and diff check passed. The production change adds no drawing
+resources or timers. Final publication checks also ran:
+
+```powershell
+. ./scripts/enter-dev-shell.ps1
+cmake --preset windows-x64-debug
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+pwsh -NoProfile -File scripts/package-release.ps1
+foreach ($preset in @('windows-x64-relwithdebinfo', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-debug --target format-check analyze
+clang-tidy -p out/build/windows-x64-debug/tidy-commands src/app/settings_ui.cpp src/app/application.cpp src/model/settings_form.cpp tests/settings_window.cpp
+dumpbin /dependents out/release/1.1.4/Loadbar.exe
+dumpbin /headers out/release/1.1.4/Loadbar.exe
+rg -n 'LoadLibrary|LoadPackagedLibrary|GetProcAddress|DELAYLOAD' src CMakeLists.txt cmake
+git -c core.safecrlf=false diff --check
+```
+
+All builds/tests, final format/MSVC analysis and targeted clang-tidy passed. The source search
+found no explicit dynamic/delayed loads. Packaging results are in [packaging.md](packaging.md).
+Independent adversarial and code-level performance reviews found no actionable issues.
+Live high-contrast/DPI interaction and production performance measurements were not rerun.
+
+Pending manual check: open Settings, confirm that all three preference checkboxes blend
+into the surrounding background, and verify the footer at normal and narrow sizes. Change
+a setting, choose Close, reopen Settings and confirm the unapplied change was discarded while
+monitoring continued. Exit Loadbar should stop monitoring normally. Repeat with available
+high-contrast, DPI and text-scale settings. No live desktop interaction was performed here.
+
 ## 1.1.3 publication build
 
 On 2026-10-08, `pwsh -NoProfile -File scripts/package-release.ps1` built version 1.1.3,

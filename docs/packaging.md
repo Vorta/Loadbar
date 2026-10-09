@@ -1,5 +1,26 @@
 # Packaging and release evidence
 
+## 1.1.4 release artifact
+
+Built on 2026-10-09 using `pwsh -NoProfile -File scripts/package-release.ps1`.
+Release configure/build and all four CTest suites passed (5.25 s). Embedded product/file
+version is 1.1.4, author Vorta. The staged executable is 1,081,856 bytes. The ZIP contains
+only the same executable, verified byte-for-byte; PDBs are not shipped.
+
+| Asset | SHA-256 |
+| --- | --- |
+| Loadbar.exe | `d2c1d47ecbe83bcd788c7da5d8421f60a7aee4693d100d557818a4d0ef91a4b5` |
+| Loadbar-1.1.4-windows-x64.zip | `55fd32889a40e41598a02d772ee1f5ef39a384363d1b2f48fa7116d81683bfc3` |
+
+`dumpbin /dependents out/release/1.1.4/Loadbar.exe` lists only Windows components, without
+VC++ runtime DLL imports. `dumpbin /headers out/release/1.1.4/Loadbar.exe` confirms x64, CFG,
+ASLR, DEP, high-entropy VA and an empty delay-import directory. The source/CMake dynamic-load
+search found no explicit loads. Resource tests verify version, author, manifest, icon and
+exact license. Clean-machine execution remains pending.
+
+Release notes: [1.1.4](releases/1.1.4.md). Publication was requested after clean adversarial
+and performance reviews; the disclosed live/performance/standalone gates remain pending.
+
 ## 1.1.3 release artifact
 
 Built on 2026-10-08 using `pwsh -NoProfile -File scripts/package-release.ps1`.
@@ -66,7 +87,7 @@ clean-machine packaging and the live/performance release gates remain pending.
 
 Version **1.0.0**, author **Vorta**, built on 2026-10-08:
 The build output at publication was **1,040,384 bytes**; the current local build path
-now contains 1.1.3.
+now contains 1.1.4.
 
 SHA-256: `7FB28EBFDBBA2F206DFD8B7A1327F0367C1D251402A9B1F4BCD5671E1DE4BB7B`.
 

@@ -16,6 +16,52 @@ void check(bool condition, const char *reason) {
         throw std::runtime_error(reason);
     }
 }
+void check_checkbox_background(HWND checkbox) {
+    struct Surface {
+        HDC dc{CreateCompatibleDC(nullptr)};
+        HBITMAP bitmap{};
+        HGDIOBJ previous{};
+        ~Surface() {
+            if (previous && previous != HGDI_ERROR) {
+                SelectObject(dc, previous);
+            }
+            if (bitmap) {
+                DeleteObject(bitmap);
+            }
+            if (dc) {
+                DeleteDC(dc);
+            }
+        }
+    } surface;
+    if (!surface.dc) {
+        throw std::runtime_error("Create checkbox paint DC");
+    }
+    RECT bounds{};
+    check(GetClientRect(checkbox, &bounds) != FALSE && bounds.right > 4 && bounds.bottom > 4,
+          "Checkbox has paintable bounds");
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = bounds.right;
+    info.bmiHeader.biHeight = -bounds.bottom;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void *bits{};
+    surface.bitmap = CreateDIBSection(surface.dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!surface.bitmap) {
+        throw std::runtime_error("Create checkbox paint bitmap");
+    }
+    surface.previous = SelectObject(surface.dc, surface.bitmap);
+    check(surface.previous && surface.previous != HGDI_ERROR, "Select checkbox bitmap");
+    // A sentinel distinguishes native painting from untouched pixels in a hidden window.
+    SetDCBrushColor(surface.dc, RGB(255, 0, 255));
+    FillRect(surface.dc, &bounds, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+    SendMessageW(checkbox, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(surface.dc), PRF_CLIENT);
+    for (const auto y : {1L, bounds.bottom / 2, bounds.bottom - 2}) {
+        check(GetPixel(surface.dc, bounds.right - 2, y) == GetSysColor(COLOR_WINDOW),
+              "Native checkbox paints its empty area with the Settings background");
+    }
+}
 void drive_settings_tests() {
     using namespace loadbar;
     for (unsigned mask = 0; mask < 8; ++mask) {
@@ -105,10 +151,28 @@ void geometry_tests() {
                   "Table height follows resize");
             check(large.readings.width - compact.readings.width == px(200),
                   "Table width follows resize");
-            check(large.buttons[3].x + large.buttons[3].width == px(1000) - px(12),
-                  "Exit right anchored");
-            check(large.buttons[3].y + large.buttons[3].height == px(900) - px(12),
-                  "Exit bottom anchored");
+            check(large.buttons[4].x + large.buttons[4].width == px(1000) - px(12),
+                  "Close right anchored");
+            check(large.buttons[4].y + large.buttons[4].height == px(900) - px(12),
+                  "Close bottom anchored");
+            check(large.buttons[3].x == px(12) && large.buttons[3].y == large.buttons[4].y,
+                  "Exit Loadbar is left anchored beside the Settings action group");
+            for (const auto &layout : {compact, large}) {
+                for (std::size_t i = 0; i < layout.buttons.size(); ++i) {
+                    if (i == 2 && !retry) {
+                        continue;
+                    }
+                    for (std::size_t j = i + 1; j < layout.buttons.size(); ++j) {
+                        if (j == 2 && !retry) {
+                            continue;
+                        }
+                        const auto a = layout.buttons[i], b = layout.buttons[j];
+                        check(a.x + a.width <= b.x || b.x + b.width <= a.x ||
+                                  a.y + a.height <= b.y || b.y + b.height <= a.y,
+                              "Footer actions do not overlap");
+                    }
+                }
+            }
             const auto narrow = settings_layout(px(320), px(240), scale, retry, px(10000), px(17));
             check(narrow.readings.height == px(120), "Table minimum retained");
             check(narrow.scroll > 0, "Short windows scroll");
@@ -138,7 +202,7 @@ void geometry_tests() {
                 settings_layout(px(320), px(240), scale, retry, px(10000), px(17), px(60));
             check(short_notice.footer_status.y + short_notice.footer_status.height <=
                           short_notice.buttons[0].y &&
-                      short_notice.buttons[3].y + short_notice.buttons[3].height <= px(240),
+                      short_notice.buttons[4].y + short_notice.buttons[4].height <= px(240),
                   "Wrapped message and buttons fit short windows");
             const auto restored =
                 settings_layout(px(800), px(900), scale, retry, narrow.scroll, px(17));
@@ -167,8 +231,8 @@ void constrained_geometry_tests() {
                               start.buttons[0].y >=
                                   start.footer_status.y + start.footer_status.height,
                           "Overflow notice and buttons follow readings without overlap");
-                    check(end.buttons[3].y >= 0 && end.buttons[3].y + end.buttons[3].height <= 240,
-                          "Scrolling reaches Exit under fixed-size text scaling");
+                    check(end.buttons[4].y >= 0 && end.buttons[4].y + end.buttons[4].height <= 240,
+                          "Scrolling reaches Close under fixed-size text scaling");
                     for (std::size_t i = 0; i < start.buttons.size(); ++i) {
                         if (i == 2 && !retry) {
                             continue;
@@ -456,6 +520,16 @@ struct SettingsWindowTests {
             for (const int id : {kCpuSquares, kHoverInfo, kTaskManagerClick}) {
                 const auto box = GetDlgItem(app.settings_content_, id);
                 check(box != nullptr, "Preference checkbox exists");
+                for (const auto state : {BST_UNCHECKED, BST_CHECKED}) {
+                    SendMessageW(box, BM_SETCHECK, state, 0);
+                    check_checkbox_background(box);
+                    EnableWindow(box, FALSE);
+                    check_checkbox_background(box);
+                    EnableWindow(box, TRUE);
+                    SendMessageW(box, WM_THEMECHANGED, 0, 0);
+                    check_checkbox_background(box);
+                }
+                SendMessageW(box, BM_SETCHECK, id == kCpuSquares ? BST_UNCHECKED : BST_CHECKED, 0);
                 const auto initial = SendMessageW(box, BM_GETCHECK, 0, 0);
                 check(initial == (id == kCpuSquares ? BST_UNCHECKED : BST_CHECKED),
                       "Preference defaults preserve existing behavior");
@@ -777,7 +851,7 @@ struct SettingsWindowTests {
                       -static_cast<int>(std::round(
                           24.0F * static_cast<float>(GetDpiForWindow(app.settings_window_)) / 96)),
                   "Font follows text scale");
-            const auto exit_button = app.settings_control(100);
+            const auto exit_button = app.settings_control(kCloseSettings);
             check(GetParent(exit_button) == app.settings_content_,
                   "Text scaling in a small window moves footer into scrollable content");
             check(SendMessageW(exit_button, WM_QUERYUISTATE, 0, 0) ==
@@ -789,9 +863,9 @@ struct SettingsWindowTests {
                 GetWindowRect(app.settings_content_, &viewport);
                 return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
             };
-            SendMessageW(app.settings_content_, WM_COMMAND, MAKEWPARAM(100, BN_SETFOCUS),
+            SendMessageW(app.settings_content_, WM_COMMAND, MAKEWPARAM(kCloseSettings, BN_SETFOCUS),
                          reinterpret_cast<LPARAM>(exit_button));
-            check(inside_viewport(exit_button), "Keyboard focus scrolls Exit into view");
+            check(inside_viewport(exit_button), "Keyboard focus scrolls Close into view");
             app.ensure_visible(field(0));
             check(inside_viewport(field(0)), "First field remains keyboard reachable");
             app.recovery_.rendering = true;
@@ -803,14 +877,14 @@ struct SettingsWindowTests {
             check(inside_viewport(app.settings_control(102)), "Retry remains keyboard reachable");
             app.ensure_visible(exit_button);
             check(inside_viewport(exit_button),
-                  "Long recovery notice cannot hide Exit permanently");
+                  "Long recovery notice cannot hide Close permanently");
             app.ensure_visible(field(4));
             SetWindowTextW(field(4), L"90");
             check(enabled(kApplySettings) && enabled(kCancelSettings),
                   "Reparented actions still track edits");
             const auto check_tab_order = [&] {
                 auto previous = GetDlgItem(app.settings_content_, kDetailsControl);
-                for (const auto id : {kApplySettings, kCancelSettings, 102, 100}) {
+                for (const auto id : {100, kApplySettings, kCancelSettings, 102, kCloseSettings}) {
                     const auto action = app.settings_control(id);
                     const auto next = GetNextDlgTabItem(app.settings_window_, previous, FALSE);
                     if (next != action) {
@@ -824,13 +898,21 @@ struct SettingsWindowTests {
                     previous = action;
                 }
                 check(GetNextDlgTabItem(app.settings_window_, previous, FALSE) == field(0),
-                      "Tab wraps from Exit to the first field");
+                      "Tab wraps from Close to the first field");
             };
             check_tab_order();
             const auto cancel = app.settings_control(kCancelSettings);
             SendMessageW(app.settings_content_, WM_COMMAND, MAKEWPARAM(kCancelSettings, BN_CLICKED),
                          reinterpret_cast<LPARAM>(cancel));
             check(!app.settings_dirty_, "Reparented Cancel still routes through content host");
+            SetWindowTextW(field(4), L"90");
+            SendMessageW(exit_button, BM_CLICK, 0, 0);
+            check(!app.settings_dirty_ && !app.closing_ && IsWindow(app.window_),
+                  "Scrollable Close closes only Settings and discards the draft");
+            wchar_t compact_shutdown_label[32]{};
+            GetWindowTextW(app.settings_control(100), compact_shutdown_label, 32);
+            check(std::wstring_view(compact_shutdown_label) == L"Exit &Loadbar",
+                  "Scrollable application exit retains its full label");
             app.recovery_ = {};
             app.rendering_error_.clear();
             app.update_settings_status();
@@ -845,6 +927,31 @@ struct SettingsWindowTests {
             app.recovery_.sampling = true;
             app.update_settings_status();
             check_tab_order();
+            const auto close = app.settings_control(kCloseSettings);
+            check(IsWindowEnabled(close) != FALSE, "Close Settings is always enabled");
+            wchar_t close_label[32]{};
+            GetWindowTextW(close, close_label, 32);
+            check(std::wstring_view(close_label) == L"Cl&ose",
+                  "Settings-only action is labeled Close with a distinct mnemonic");
+            wchar_t shutdown_label[32]{};
+            GetWindowTextW(app.settings_control(100), shutdown_label, 32);
+            check(std::wstring_view(shutdown_label) == L"Exit &Loadbar",
+                  "Application exit always retains its distinguishing full label");
+            for (const bool tray_available : {false, true}) {
+                app.tray_added_ = tray_available;
+                SetWindowTextW(field(4), L"90");
+                check(app.settings_dirty_, "Close test has an unapplied draft");
+                SendMessageW(GetParent(close), WM_COMMAND, MAKEWPARAM(kCloseSettings, BN_SETFOCUS),
+                             reinterpret_cast<LPARAM>(close));
+                check(app.settings_dirty_ && !app.closing_, "Focus does not close Settings");
+                SendMessageW(close, BM_CLICK, 0, 0);
+                check(
+                    !app.settings_dirty_ && app.settings_draft().thickness == L"80" &&
+                        !app.closing_ && IsWindow(app.window_) && IsWindow(app.settings_window_) &&
+                        !IsWindowVisible(app.settings_window_),
+                    "Close discards Settings draft without shutdown even when tray is unavailable");
+            }
+            app.tray_added_ = false; // No real tray icon was registered by this test.
             check(!IsWindowVisible(app.settings_window_), "Window stayed hidden throughout tests");
         }
         MSG message{};

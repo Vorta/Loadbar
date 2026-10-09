@@ -51,45 +51,67 @@ SettingsLayout settings_layout(int width, int height, float scale, bool retry, i
     };
     SettingsLayout result;
     const int margin = px(12), gap = px(8), button_height = px(28);
-    const std::array widths{px(85), px(85), px(150), px(110)};
+    const std::array widths{px(85), px(85), px(150), px(110), px(85)};
     const int content_width = std::max(0, width - scrollbar_width);
     const auto footer = [&](int available_width, bool compact) {
-        // Preserve keyboard order and right alignment. A constrained footer becomes part
-        // of the scrolling content, including any wrapped buttons and recovery notice.
+        // Keep application shutdown separate from the right-hand Settings actions.
         const int max_width = std::max(1, available_width - 2 * margin);
         const int status_space = status_height > 0 ? status_height + gap : 0;
-        int row_start = 0, row_width = 0, row_y = margin + status_space, row_height = 0;
-        const auto finish_row = [&](int end) {
+        int row_y = margin + status_space;
+        const auto button_size = [&](std::size_t i) {
+            const int natural_width = compact && i == 2 ? widths[0] : widths[i];
+            const int button_width = std::min(natural_width, max_width);
+            return ControlBounds{0, 0, button_width,
+                                 button_height *
+                                     ((natural_width + button_width - 1) / button_width)};
+        };
+        auto &shutdown = result.buttons[3];
+        shutdown = button_size(3);
+        shutdown.x = margin;
+        shutdown.y = row_y;
+        constexpr std::array<std::size_t, 4> actions{0, 1, 2, 4};
+        int actions_width{};
+        for (auto i : actions) {
+            if (i != 2 || retry) {
+                result.buttons[i] = button_size(i);
+                actions_width += (actions_width ? gap : 0) + result.buttons[i].width;
+            }
+        }
+        if (shutdown.width + gap + actions_width > max_width) {
+            row_y += shutdown.height + gap;
+        }
+        std::size_t row_start{};
+        int row_width{}, row_height{};
+        const auto finish_row = [&](std::size_t end) {
             int x = std::max(margin, available_width - margin - row_width);
-            for (int i = row_start; i < end; ++i) {
+            for (auto index = row_start; index < end; ++index) {
+                const auto i = actions[index];
                 if (i == 2 && !retry) {
                     continue;
                 }
-                auto &button = result.buttons[static_cast<std::size_t>(i)];
+                auto &button = result.buttons[i];
                 button.x = x;
                 button.y = row_y;
                 x += button.width + gap;
             }
         };
-        for (int i = 0; i < 4; ++i) {
+        for (std::size_t index = 0; index < actions.size(); ++index) {
+            const auto i = actions[index];
             if (i == 2 && !retry) {
                 continue;
             }
-            const int natural_width = compact ? widths[0] : widths[static_cast<std::size_t>(i)];
-            const int next_width = std::min(natural_width, max_width);
-            const int next_height = button_height * ((natural_width + next_width - 1) / next_width);
-            if (row_width && row_width + gap + next_width > max_width) {
-                finish_row(i);
-                row_start = i;
+            const auto &button = result.buttons[i];
+            if (row_width && row_width + gap + button.width > max_width) {
+                finish_row(index);
+                row_start = index;
                 row_y += row_height + gap;
                 row_width = 0;
                 row_height = 0;
             }
-            result.buttons[static_cast<std::size_t>(i)] = {0, 0, next_width, next_height};
-            row_width += (row_width ? gap : 0) + next_width;
-            row_height = std::max(row_height, next_height);
+            row_width += (row_width ? gap : 0) + button.width;
+            row_height = std::max(row_height, button.height);
         }
-        finish_row(4);
+        finish_row(actions.size());
         result.footer_status = {margin, margin, max_width, std::max(0, status_height)};
         return row_y + row_height + margin;
     };

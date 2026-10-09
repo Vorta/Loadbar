@@ -33,8 +33,8 @@ observation age remain available in details.
 
 ## Run Loadbar
 
-**Requires Windows 11 x64.** Download **[Loadbar 1.1.3](https://github.com/Vorta/Loadbar/releases/tag/v1.1.3)**.
-See the [release notes](docs/releases/1.1.3.md) for details and validation status.
+**Requires Windows 11 x64.** Download **[Loadbar 1.1.4](https://github.com/Vorta/Loadbar/releases/tag/v1.1.4)**.
+See the [release notes](docs/releases/1.1.4.md) for details and validation status.
 
 1. Run `Loadbar.exe`. Its notification-area icon may be in the overflow menu.
 2. Click the icon for **Settings**. Choose the monitor, edge, GPU and network interface.
@@ -43,7 +43,8 @@ See the [release notes](docs/releases/1.1.3.md) for details and validation statu
 3. Hover for readings and device details. Left-click the bar to open Task Manager;
    right-click for the menu. Hover readings and the Task Manager shortcut can be disabled in Settings.
 4. Choose **Exit** in the tray/bar menu or **Exit Loadbar** in Settings to release the
-   reserved space. Closing Settings normally leaves Loadbar running.
+   reserved space. **Close** dismisses Settings and discards unapplied changes while Loadbar
+   keeps running.
 
 Adjust thickness from **40–640 DIPs**, alignment, and sampling from **250–5,000 ms**.
 Enable **Display CPU usage always as squares** to use square CPU tiles on hybrid processors too.

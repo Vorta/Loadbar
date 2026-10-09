@@ -6,6 +6,16 @@ configuration; the prescribed 1 Hz performance gate remains pending. Automated t
 and offscreen probes do not establish production overhead. See
 [AGENTS.md](../AGENTS.md#performance-gate) for the targets and required conditions.
 
+## 1.1.4 Settings review
+
+A separate performance subagent found no actionable resource or hot-path regression on
+2026-10-09. Checkbox painting uses a system-owned brush; the Close button is created once
+with Settings and destroyed with its parent. Footer arithmetic uses fixed-size arrays and
+bounded loops. Reparenting occurs only when layout requires it. Closing Settings stops its
+freshness scheduling needs, and hidden/minimized Settings skips detail formatting. No new
+sampling, rendering loop, timer, thread or periodic I/O was added. This was source inspection,
+not a fresh CPU/RAM/GPU, paint-cadence or one-hour lifetime measurement; those gates remain pending.
+
 ## Implemented cost controls
 
 - One sampling worker with persistent queries, reusable PDH buffers and interruptible waits.
