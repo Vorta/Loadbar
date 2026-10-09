@@ -36,6 +36,7 @@ struct Settings {
     bool gpu_visible{true}, network_visible{true};
     bool cpu_squares{};
     bool show_temperatures{true};
+    bool always_show_readout{true};
     bool show_hover_info{true}, show_tooltips{true}, open_task_manager_on_click{true};
     HiddenDiskIds hidden_disks;
     bool operator==(const Settings &) const = default;

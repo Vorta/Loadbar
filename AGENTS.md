@@ -78,12 +78,12 @@ Centralize these defaults; do not promote them into additional user requirements
 | Sampling | 1,000 ms; validate a configurable range of 250–5,000 ms. |
 | Placement | Bottom on portrait; right on landscape. Allow explicit selection of any edge. |
 | Thickness | Default 40 DIPs; validate whole-number input from 40–640 DIPs, increasing to the readable minimum for topology/orientation/text scale; DIPs are the only sizing unit; migrate saved percentage sizes. |
-| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings; temperatures are the only always-visible numbers. |
+| Devices | All discovered physical disks as separate widgets, one selected hardware GPU and network interface; per-drive checkboxes and GPU/Network Hide allow explicit exclusions, visible by default. Identify visible devices in hover tooltips and Settings; numeric readouts follow the interaction policy below. |
 | Disk mode | Active time with smaller read/write throughput bars. Keep IOPS feasible without implementing it speculatively. |
-| Rate units | Inline/Settings use B/s, KiB/s, MiB/s, GiB/s. Popup tooltips use one-decimal MB/GB (MB/s or GB/s for rates), explicitly Windows-style binary units; tiny positive values below 0.1 MB use <0.1, while zero stays zero. |
+| Rate units | Always-visible readouts use compact binary B/K/M/G/T/P/E, with rates implying bytes per second. Hover/Settings use B/s, KiB/s, MiB/s, GiB/s. Popup tooltips use one-decimal MB/GB (MB/s or GB/s for rates), explicitly Windows-style binary units; tiny positive values below 0.1 MB use <0.1, while zero stays zero. |
 | Controls | Notification-area menu for selection, placement, settings, and exit; no autohide by default. |
 | Startup | No launch-at-sign-in registration unless explicitly requested. |
-| Interaction | Show info on hover, Show tooltips and Open Task Manager on click are checked by default. Show info on hover controls inline numbers; Show tooltips independently controls the bar popup. Settings readings and the tray tooltip remain available. Older settings migrate the tooltip choice from hover info. |
+| Interaction | Always show readout is checked by default, including migrated settings. It reserves a two-line numeric column after each graphic and disables hover overlays; the Show info on hover checkbox is disabled while retaining its saved choice. With readouts unchecked, the original graphic layout and hover preference apply. Show info on hover, Show tooltips and Open Task Manager on click are checked by default. Show info on hover controls inline numbers; Show tooltips independently controls the bar popup. Settings readings and the tray tooltip remain available. Older settings migrate the tooltip choice from hover info. |
 | CPU shape | Display CPU usage always as squares is unchecked by default; checked mode retains P/E class sizes with 14/6-DIP square sides. |
 | Temperatures | Show temperatures is checked by default, including migrated settings. Unchecking hides temperature values/effects and pauses all temperature collection independently of hover/tooltips. |
 
@@ -348,7 +348,7 @@ thresholds. High contrast uses system colors without thermal blending or glow.
   when it no longer fits; reflow for changes to edge length,
   orientation, topology, devices or Windows text scale. Keep equal non-CPU graphic widths and separate
   automatic magnification from DPI/text scaling. Native controls retain Windows sizing.
-- Utilization/capacity/rate numbers appear on hover only; temperatures follow the policy above.
+- Utilization/capacity/rate numbers follow Always show readout or the saved hover preference; temperatures follow the policy above.
   GPU uses Device violet; network keeps the 2:1 (14/6-DIP
   reference) split. Disk hues are active `#65C55B`, read `#B9DF9B`, write `#36884D`, with
   existing tone treatment and high-contrast overrides. These are fixed presentation choices.
@@ -370,7 +370,10 @@ thresholds. High contrast uses system colors without thermal blending or glow.
   side-by-side device meters from bottom to top. Rotate the CPU grid clockwise on Right (E left
   of P) and counterclockwise on Left (E right of P); size its area to the fitted grid. Rotate
   inline hover text top-down on Right and bottom-up on Left; native tooltips stay upright.
-  Visible non-CPU graphics divide the remaining height equally.
+  Always-visible readouts rotate in the same text direction in reserved space after the graphic
+  along its reading direction; icons remain below the complete group. When necessary, readout
+  mode wraps widgets into additional columns within the readable thickness. Visible non-CPU
+  graphics divide the remaining height equally.
 - Reflow the same visible metrics for horizontal/vertical bars. Enforce a documented compact
   layout/minimum readable size rather than silently hiding processors. Provide complete
   readings and statuses in accessible text/tooltips when inline numbers do not fit; popup

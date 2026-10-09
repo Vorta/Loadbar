@@ -333,9 +333,9 @@ void migration_tests() {
                     migrated->alignment == Alignment::end && migrated->gpu_id == L"gpu" &&
                     migrated->network_id == L"nic",
                 "Legacy scale retirement retains placement/devices/appearance");
-        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 12 ") &&
+        require(migrated && encode_settings(*migrated).starts_with(L"Loadbar 13 ") &&
                     decode_settings(encode_settings(*migrated)) == migrated,
-                "Migrated choices round trip in v11 without persisted peaks");
+                "Migrated choices round trip without persisted peaks");
     }
     for (const auto *malformed :
          {L"Loadbar 4 0 40 1000 \"\" \"\" \"\" 0 2 0 0",

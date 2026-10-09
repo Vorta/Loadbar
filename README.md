@@ -4,16 +4,23 @@
 
 Loadbar shows per-core CPU activity, RAM, GPU, every physical disk, and network traffic in
 one native Windows bar. Place it along any edge of your chosen monitor. It reserves desktop
-space so ordinary maximized windows fit beside it; hover to reveal the numbers.
+space so ordinary maximized windows fit beside it. Show numbers beside the graphics or on hover.
 
-![Loadbar updating its graphics in normal mode at 60 DIPs](docs/media/loadbar-demo.gif)
+**Always show readout: off**
 
-*Illustration at 60 DIPs using synthetic readings.*
+![Loadbar with graphics and temperatures at 60 DIPs](docs/media/loadbar-demo.gif)
+
+**Always show readout: on**
+
+![Loadbar with numeric readouts and temperatures at the same scale](docs/media/loadbar-readout-demo.gif)
+
+*Same scale, synthetic readings and temperatures: 60 DIPs, 8 P-cores + 16 E-cores,
+with CPU squares enabled and one logical processor per core.*
 
 Built in native C++, Loadbar samples once per second by default and redraws when readings
 or window state change. It reuses resources and keeps current readings rather than a growing
-history. No browser engine or background service. See the [performance evidence](docs/performance.md);
-controlled CPU and RAM measurements for this version remain pending.
+history. No browser engine or background service. See the [performance evidence](docs/performance.md)
+for measured usage and validation limits.
 
 ## What it shows
 
@@ -22,7 +29,7 @@ controlled CPU and RAM measurements for this version remain pending.
 | Widget | Readings |
 | --- | --- |
 | CPU | One colored tile per logical processor, with physical-core relationships in details |
-| RAM | Physical memory used, plus used/total GB on hover |
+| RAM | Physical memory used, plus used/total capacity in readouts or on hover |
 | GPU | Separate 3D activity, video decode, and GPU memory |
 | Disks | Every discovered physical disk, with active time and separate read/write rates |
 | Network | Download and upload on the selected interface, including local-network traffic |
@@ -38,10 +45,14 @@ see [temperature sources](docs/metrics.md#temperature-sources-120). RAM temperat
 Uncheck **Show temperatures** in Settings to hide the readouts and stop all temperature
 collection; other readings continue normally.
 
+Version 1.3.0 enables **Always show readout** by default: numeric values sit
+beside each graphic. Uncheck it in Settings to return to the original graphics and hover
+mode. Popup tooltips and temperatures remain independently controlled.
+
 ## Run Loadbar
 
-**Requires Windows 11 x64.** Download **[Loadbar 1.2.0](https://github.com/Vorta/Loadbar/releases/tag/v1.2.0)**.
-See the [release notes](docs/releases/1.2.0.md) for details and validation status.
+**Requires Windows 11 x64.** Download **[Loadbar 1.3.0](https://github.com/Vorta/Loadbar/releases/tag/v1.3.0)**.
+See the [release notes](docs/releases/1.3.0.md) for details and validation status.
 
 1. Run `Loadbar.exe`. Its notification-area icon may be in the overflow menu.
 2. Click the icon for **Settings**. Choose the monitor, edge, GPU and network interface.

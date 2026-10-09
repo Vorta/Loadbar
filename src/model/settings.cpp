@@ -56,8 +56,8 @@ bool valid_settings(const Settings &settings) {
 std::wstring encode_settings(const Settings &settings) {
     std::wostringstream stream;
     stream.imbue(std::locale::classic());
-    // v12 controls temperature collection and presentation together.
-    stream << L"Loadbar 12 " << static_cast<unsigned>(settings.edge) << L' '
+    // v13 adds independent, default-on readout columns without changing collection.
+    stream << L"Loadbar 13 " << static_cast<unsigned>(settings.edge) << L' '
            << std::setprecision(17) << settings.thickness << L' ' << settings.interval_ms << L' '
            << std::quoted(settings.monitor_id) << L' ' << std::quoted(settings.gpu_id) << L' '
            << std::quoted(settings.network_id) << L' ' << static_cast<unsigned>(settings.alignment)
@@ -69,7 +69,7 @@ std::wstring encode_settings(const Settings &settings) {
     }
     stream << L' ' << settings.cpu_squares << L' ' << settings.show_hover_info << L' '
            << settings.open_task_manager_on_click << L' ' << settings.show_tooltips << L' '
-           << settings.show_temperatures;
+           << settings.show_temperatures << L' ' << settings.always_show_readout;
     return stream.str();
 }
 std::optional<Settings> decode_settings(std::wstring_view text) {
@@ -82,7 +82,7 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
     std::wstring name;
     unsigned version{}, edge{}, mode{}, scale{};
     stream >> name >> version >> edge;
-    if (!stream || name != L"Loadbar" || version < 1 || version > 12 || edge > 4) {
+    if (!stream || name != L"Loadbar" || version < 1 || version > 13 || edge > 4) {
         return std::nullopt;
     }
     if (version < 3) {
@@ -180,6 +180,14 @@ std::optional<Settings> decode_settings(std::wstring_view text) {
             return std::nullopt;
         }
         result.show_temperatures = temperatures != 0;
+    }
+    if (version >= 13) {
+        unsigned readout{};
+        stream >> readout;
+        if (!stream || readout > 1) {
+            return std::nullopt;
+        }
+        result.always_show_readout = readout != 0;
     }
     // Validate old records before retiring ceilings/log mode. No old peak is inferred.
     if (version < 4 && !std::ranges::all_of(

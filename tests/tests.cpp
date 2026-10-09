@@ -12,6 +12,7 @@
 void run_regressions();
 void run_placement_tests();
 void run_design_tests();
+void readout_tests();
 void run_metric_upgrade_tests();
 void run_continuity_tests();
 void run_optimization_model_tests();
@@ -195,6 +196,7 @@ int wmain(int argc, wchar_t **argv) {
         run_regressions();
         run_placement_tests();
         run_design_tests();
+        readout_tests();
         run_metric_upgrade_tests();
         run_continuity_tests();
         run_optimization_model_tests();

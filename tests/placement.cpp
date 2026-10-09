@@ -6,6 +6,9 @@
 #include <stdexcept>
 
 namespace {
+loadbar::Settings graphics_only() {
+    return {.always_show_readout = false};
+}
 void require(bool value, const char *message) {
     if (!value) {
         throw std::runtime_error(message);
@@ -68,9 +71,10 @@ std::vector<loadbar::Processor> hybrid_processors() {
 void run_placement_tests() {
     using namespace loadbar;
     const auto processors = hybrid_processors();
-    const auto full_minimum = minimum_thickness(640, 300, loadbar::Edge::top, processors, 1, {}, 2);
+    const auto full_minimum =
+        minimum_thickness(640, 300, loadbar::Edge::top, processors, 1, graphics_only(), 2);
     const auto short_minimum =
-        minimum_thickness(560, 300, loadbar::Edge::top, processors, 1, {}, 2);
+        minimum_thickness(560, 300, loadbar::Edge::top, processors, 1, graphics_only(), 2);
     require(short_minimum > full_minimum,
             "Fixture exercises a shortened edge needing extra thickness");
     for (const unsigned dpi : {96U, 120U, 144U, 192U}) {
@@ -86,7 +90,7 @@ void run_placement_tests() {
                             dpi,
                             true};
             // Horizontal monitor is 640x1200 DIPs; vertical is 1200x640.
-            Settings settings;
+            Settings settings{.always_show_readout = false};
             settings.edge = edge;
             const auto saved = settings;
             for (const bool adjust_at_set : {false, true}) {
@@ -154,7 +158,7 @@ void run_placement_tests() {
         shell.thin_result = failure == 3;
         {
             AppBar bar(shell);
-            Settings settings;
+            Settings settings{.always_show_readout = false};
             settings.edge = Edge::top;
             const Monitor monitor{L"m", L"m", {-600, -1200, 0, 0}, 96, true};
             require(!place_readable_bar(bar, monitor, settings, processors, 1, 2),
@@ -170,7 +174,7 @@ void run_placement_tests() {
         shell.query_length = 600;
         shell.set_length = 560;
         AppBar settled(shell);
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         settings.edge = Edge::top;
         const Monitor monitor{L"m", L"m", {-640, -1200, 0, 0}, 96, true};
         const auto short_edge = place_readable_bar(settled, monitor, settings, processors, 1, 2);
@@ -197,7 +201,7 @@ void run_placement_tests() {
     changing.set_length = 560;
     changing.shorten_each_set = true;
     AppBar bar(changing);
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.edge = Edge::top;
     const auto result = place_readable_bar(bar, {L"m", L"m", {0, 0, 600, 1200}, 96, true}, settings,
                                            processors, 1, 2);

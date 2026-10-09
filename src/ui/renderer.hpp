@@ -47,6 +47,8 @@ class Renderer {
     void status_mark(Box bounds, Status status);
     void overlay(std::size_t block, const Snapshot &snapshot, const Settings &settings,
                  Clock::time_point now);
+    void readout(std::size_t block, const Snapshot &snapshot, const Settings &settings,
+                 Clock::time_point now);
     IDWriteTextLayout *text_layout(const std::wstring &text, float width, float height,
                                    unsigned font);
     struct TextCache {
@@ -55,6 +57,8 @@ class Renderer {
         unsigned font{};
         Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
         float temperature_x{}, temperature_bottom_adjustment{};
+        float advance{};
+        float baseline{};
     };
     IDWriteTextLayout *text_layout(TextCache &cache, const std::wstring &text, float width,
                                    float height, unsigned font);
@@ -80,6 +84,7 @@ class Renderer {
     std::vector<TextCache> text_cache_;
     // Temperature slots follow component blocks, independently of optional hover text.
     std::vector<TextCache> temperature_cache_;
+    std::vector<std::array<TextCache, 3>> readout_cache_;
     std::vector<GlowCache> glows_;
     std::vector<Reading> core_readings_;
     std::vector<std::array<Reading, 3>> block_readings_;
@@ -94,6 +99,7 @@ class Renderer {
     bool layout_gpu_visible_{true}, layout_network_visible_{true};
     bool layout_cpu_squares_{}, layout_gpu_memory_{};
     bool layout_show_temperatures_{true};
+    bool layout_always_readout_{};
     Alignment layout_alignment_{};
     float content_scale_{};
     float temperature_size_{};

@@ -21,7 +21,7 @@ struct Layout {
     float temperature_font_size{9};
     std::vector<CoreBox> cores;
     struct Block {
-        Box bounds, icon, graphic, temperature;
+        Box bounds, icon, graphic, temperature, readout;
         unsigned kind{}; // Icon/family: CPU, RAM, GPU, physical disk, network.
         std::size_t disk{};
         std::array<Gauge, 3> types{Gauge::count, Gauge::count, Gauge::count};

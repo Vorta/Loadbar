@@ -1,5 +1,6 @@
 #include "model/continuity.hpp"
 #include "model/geometry.hpp"
+#include "model/strip_style.hpp"
 #include "ui/renderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,9 @@
 #include <wincodec.h>
 
 namespace {
+loadbar::Settings graphics_only() {
+    return {.always_show_readout = false};
+}
 void checked(HRESULT result) {
     if (FAILED(result)) {
         throw std::runtime_error(
@@ -113,7 +117,7 @@ void uniform_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *fact
             bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
         Renderer reused;
         for (unsigned mask : {3U, 2U, 0U, 1U, 3U}) {
-            Settings settings;
+            Settings settings{.always_show_readout = false};
             settings.gpu_visible = (mask & 1U) != 0;
             settings.network_visible = (mask & 2U) != 0;
             checked(reused.render_to(target.Get(), snapshot, settings,
@@ -152,7 +156,7 @@ void vertical_edge_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
     auto snapshot = fixture();
     Renderer reused;
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     for (bool squares : {false, true}) {
         settings.cpu_squares = squares;
         for (Edge edge : {Edge::right, Edge::left, Edge::right}) {
@@ -276,7 +280,7 @@ void preference_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
             bitmap.Get(), D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE), &target));
         Renderer renderer;
         auto snapshot = fixture();
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         for (bool squares : {false, true}) {
             settings.cpu_squares = squares;
             for (int memory = 0; memory < 3; ++memory) {
@@ -393,7 +397,7 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
         Renderer renderer;
         const auto layout = make_snapshot_layout(
             static_cast<float>(width), static_cast<float>(height),
-            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, {});
+            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, graphics_only());
         require(layout.fits && layout.cores.size() == 8,
                 "Four-core/eight-thread layout has eight tiles");
         const auto center = [&](const std::vector<BYTE> &image, std::size_t tile) {
@@ -404,7 +408,7 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             return std::array{image[offset], image[offset + 1], image[offset + 2]};
         };
         for (bool contrast : {false, true}) {
-            checked(renderer.render_to(target.Get(), snapshot, {},
+            checked(renderer.render_to(target.Get(), snapshot, graphics_only(),
                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                        false, 1, false, contrast, {}));
             if (horizontal && !contrast) {
@@ -414,7 +418,7 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             for (std::size_t changed = 0; changed < 8; ++changed) {
                 auto update = snapshot;
                 update.processors[changed].utilization.value = changed < 4 ? 100 : 0;
-                checked(renderer.render_to(target.Get(), update, {},
+                checked(renderer.render_to(target.Get(), update, graphics_only(),
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                            false, 1, false, contrast, {}));
                 const auto actual = pixels(bitmap.Get(), width, height);
@@ -428,14 +432,14 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
             continuity.observe(retained);
             retained.processors[1].utilization.status = Status::error;
             continuity.observe(retained);
-            checked(renderer.render_to(target.Get(), retained, {},
+            checked(renderer.render_to(target.Get(), retained, graphics_only(),
                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                        false, 1, false, contrast, {}));
             require(pixels(bitmap.Get(), width, height) == baseline,
                     "SMT error retention preserves both independent thread tiles");
             auto warming = snapshot;
             warming.processors[0].utilization.status = Status::warming_up;
-            checked(renderer.render_to(target.Get(), warming, {},
+            checked(renderer.render_to(target.Get(), warming, graphics_only(),
                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                        false, 1, false, contrast, {}));
             require(pixels(bitmap.Get(), width, height) == baseline,
@@ -444,7 +448,7 @@ void logical_processor_render_tests(IWICImagingFactory *wic, ID2D1Factory *facto
         std::ranges::reverse(snapshot.processors);
         const auto reordered = make_snapshot_layout(
             static_cast<float>(width), static_cast<float>(height),
-            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, {});
+            (horizontal ? loadbar::Edge::top : loadbar::Edge::right), snapshot, 1, graphics_only());
         for (std::size_t tile = 0; tile < 8; ++tile) {
             require(reordered.cores[tile].logical == layout.cores[tile].logical,
                     "CPU tile identity order is stable across reordered samples");
@@ -476,13 +480,13 @@ void bounded_glow_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
             }
             return S_OK;
         });
-        checked(renderer.render_to(target.Get(), snapshot, {},
+        checked(renderer.render_to(target.Get(), snapshot, graphics_only(),
                                    (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
                                    1, false, false, {}));
         const auto cold_count = creations;
         const auto cold = pixels(bitmap.Get(), width, height);
         require(cold_count > 0 && largest > 32000, "Large fixture exercises bounded glow masks");
-        checked(renderer.render_to(target.Get(), snapshot, {},
+        checked(renderer.render_to(target.Get(), snapshot, graphics_only(),
                                    (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
                                    1, false, false, {}));
         require(creations == cold_count && pixels(bitmap.Get(), width, height) == cold,
@@ -504,7 +508,7 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
         Renderer reused;
         for (bool extras : {true, false}) {
             for (unsigned mask : {0U, 1U, 2U, 3U, 0U}) {
-                Settings settings;
+                Settings settings{.always_show_readout = false};
                 settings.gpu_visible = settings.network_visible = extras;
                 for (std::size_t i = 0; i < 2; ++i) {
                     if (mask & (1U << i)) {
@@ -561,7 +565,7 @@ void drive_visibility_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
             }
         }
     }
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.hidden_disks = {L"disk0", L"disk1"};
     auto changed = snapshot;
     changed.disks.push_back({L"new", L"New drive"});
@@ -588,8 +592,8 @@ void contrast_load_regression(IWICImagingFactory *wic, ID2D1Factory *factory) {
         for (auto &cpu : snapshot.processors) {
             cpu.utilization.value = value;
         }
-        checked(renderer.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, false,
-                                   true, {}));
+        checked(renderer.render_to(target.Get(), snapshot, graphics_only(), loadbar::Edge::top,
+                                   false, 1, false, true, {}));
         auto actual = pixels(bitmap.Get(), 1274, 40);
         require(actual != previous, "Resting high-contrast CPU images distinguish 0/50/100% load");
         previous = std::move(actual);
@@ -627,9 +631,10 @@ void contrast_palette_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                     return palettes[palette_index][index == COLOR_WINDOWTEXT ? 1 : 0];
                 });
             auto snapshot = fixture();
-            auto layout = make_layout(target->GetSize().width, target->GetSize().height,
-                                      (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
-                                      snapshot.processors, 1, {}, snapshot.disks.size());
+            auto layout =
+                make_layout(target->GetSize().width, target->GetSize().height,
+                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
+                            snapshot.processors, 1, graphics_only(), snapshot.disks.size());
             snap_layout(layout, static_cast<float>(dpi));
             require(layout.fits, "High-contrast test layout fits every core");
             const auto pixel = [&](const std::vector<BYTE> &bytes, float x, float y) {
@@ -640,7 +645,7 @@ void contrast_palette_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                 return std::array{bytes[offset + 2], bytes[offset + 1], bytes[offset]};
             };
             const auto render = [&](bool contrast, bool hover = false) {
-                checked(renderer.render_to(target.Get(), snapshot, {},
+                checked(renderer.render_to(target.Get(), snapshot, graphics_only(),
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                            false, 1, hover, contrast, {}));
                 return pixels(bitmap.Get(), width, height);
@@ -738,8 +743,8 @@ void continuity_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
         const auto properties = D2D1::RenderTargetProperties();
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(drawing.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, hover,
-                                  contrast, {}));
+        checked(drawing.render_to(target.Get(), snapshot, graphics_only(), loadbar::Edge::top,
+                                  false, 1, hover, contrast, {}));
         save(wic, bitmap.Get(), directory / std::format(L"continuity-{}.png", artifact++));
         return pixels(bitmap.Get(), 1274, height);
     };
@@ -822,7 +827,7 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         auto properties = D2D1::RenderTargetProperties();
         properties.dpiX = properties.dpiY = dpi;
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(renderer.render_to(target.Get(), sample, {},
+        checked(renderer.render_to(target.Get(), sample, graphics_only(),
                                    (horizontal ? loadbar::Edge::top : loadbar::Edge::right), false,
                                    text_scale, hover, contrast, {}));
         if (keep) {
@@ -858,7 +863,7 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         for (float text_scale : {1.5F, 2.25F}) {
             const auto minimum = static_cast<float>(
                 minimum_thickness(1080, 480, loadbar::Edge::right, snapshot.processors, text_scale,
-                                  {}, snapshot.disks.size()));
+                                  graphics_only(), snapshot.disks.size()));
             require(minimum <= 480, "Vertical scaling fixture fits");
             Renderer fresh;
             require(render(reused, snapshot, minimum * 2, 1080, false, text_scale, dpi, true, false,
@@ -887,9 +892,9 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
     const auto enlarged_pixels =
         render(reused, snapshot, 3840, 80, true, 1, 96, true, false, false);
     const auto small_layout =
-        make_layout(3840, 40, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
+        make_layout(3840, 40, loadbar::Edge::top, snapshot.processors, 1, graphics_only(), 2);
     const auto large_layout =
-        make_layout(3840, 80, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
+        make_layout(3840, 80, loadbar::Edge::top, snapshot.processors, 1, graphics_only(), 2);
     const auto small_ink = ink_height(compact_pixels, small_layout.blocks[0].graphic);
     const auto large_ink = ink_height(enlarged_pixels, large_layout.blocks[0].graphic);
     require(small_ink > 0 && large_ink >= small_ink * 3 / 2,
@@ -908,21 +913,21 @@ void scaling_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         auto properties = D2D1::RenderTargetProperties();
         properties.dpiX = properties.dpiY = 96;
         checked(factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
-        checked(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 1, true,
-                                false, {}));
+        checked(retry.render_to(target.Get(), snapshot, graphics_only(), loadbar::Edge::top, false,
+                                1, true, false, {}));
         const auto before =
-            make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 1, {}, 2);
-        const auto after =
-            make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 2.25F, {}, 2);
+            make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 1, graphics_only(), 2);
+        const auto after = make_layout(1000, 400, loadbar::Edge::top, snapshot.processors, 2.25F,
+                                       graphics_only(), 2);
         require(before.fits && after.fits && before.content_scale != after.content_scale,
                 "Font retry fixture changes effective scale on the same target");
         armed = true;
-        require(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 2.25F, true,
-                                false, {}) == E_OUTOFMEMORY,
+        require(retry.render_to(target.Get(), snapshot, graphics_only(), loadbar::Edge::top, false,
+                                2.25F, true, false, {}) == E_OUTOFMEMORY,
                 "Font failure during scale change preserves native error");
         armed = false;
-        checked(retry.render_to(target.Get(), snapshot, {}, loadbar::Edge::top, false, 2.25F, true,
-                                false, {}));
+        checked(retry.render_to(target.Get(), snapshot, graphics_only(), loadbar::Edge::top, false,
+                                2.25F, true, false, {}));
         Renderer fresh;
         require(pixels(bitmap.Get(), 1000, 400) ==
                     render(fresh, snapshot, 1000, 400, true, 2.25F, 96, true, false, false),
@@ -939,7 +944,7 @@ void temperature_reference_previews(IWICImagingFactory *wic, ID2D1Factory *facto
     constexpr std::array<std::array<double, 5>, 3> temperatures{
         {{64, 46, 58, 49, 38}, {95, 72, 87, 74, 58}, {99, 77, 92, 79, 61}}};
     constexpr std::array<const wchar_t *, 3> modes{L"normal", L"hot", L"critical"};
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.cpu_squares = true;
     settings.show_hover_info = false;
     for (unsigned mode = 0; mode < modes.size(); ++mode) {
@@ -1075,7 +1080,7 @@ void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                                     &snapshot.disks[1].temperature}) {
                         t->metric = {100, Status::valid, Unit::celsius};
                     }
-                    Settings settings;
+                    Settings settings{.always_show_readout = false};
                     settings.cpu_squares = squares;
                     const float thickness = std::max(
                         requested,
@@ -1164,7 +1169,8 @@ void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                     }
                 }
             }
-            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            checked(reused.render_to(target.Get(), current, graphics_only(), edge, false, 1, false,
+                                     false, {}));
             const auto actual = pixels(bitmap.Get(), width, height);
             if (mode == 0) {
                 original = actual;
@@ -1180,10 +1186,12 @@ void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                 require(actual == original, "New sensor identity restores original icons");
             }
             const auto revision = reused.layout_revision();
-            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            checked(reused.render_to(target.Get(), current, graphics_only(), edge, false, 1, false,
+                                     false, {}));
             require(revision == reused.layout_revision(), "Temperature layout is cached");
             Renderer fresh;
-            checked(fresh.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+            checked(fresh.render_to(target.Get(), current, graphics_only(), edge, false, 1, false,
+                                    false, {}));
             require(actual == pixels(bitmap.Get(), width, height),
                     "Temperature transition equals fresh rendering");
             const wchar_t *names[]{L"unavailable", L"normal",   L"critical",
@@ -1195,16 +1203,19 @@ void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
         }
         assign(current.gpu_temperature, 87);
         for (bool hover : {false, true}) {
-            checked(reused.render_to(target.Get(), current, {}, edge, false, 1, hover, true, {}));
+            checked(reused.render_to(target.Get(), current, graphics_only(), edge, false, 1, hover,
+                                     true, {}));
             save(wic, bitmap.Get(),
                  directory / std::format(L"temperature-contrast-{}-{}.png",
                                          static_cast<unsigned>(edge), hover));
         }
         assign(current.gpu_temperature, 58.5);
-        checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+        checked(reused.render_to(target.Get(), current, graphics_only(), edge, false, 1, false,
+                                 false, {}));
         const auto rounded = pixels(bitmap.Get(), width, height);
         assign(current.gpu_temperature, 58.51);
-        checked(reused.render_to(target.Get(), current, {}, edge, false, 1, false, false, {}));
+        checked(reused.render_to(target.Get(), current, graphics_only(), edge, false, 1, false,
+                                 false, {}));
         require(rounded == pixels(bitmap.Get(), width, height),
                 "Outside tint/glow ramps, integer formatting agrees with repaint rounding");
         for (float text_scale : {1.0F, 1.5F, 2.0F}) {
@@ -1224,12 +1235,12 @@ void temperature_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
                     D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
                                                  D2D1::PixelFormat(), dpi, dpi),
                     &scaled_target));
-                checked(reused.render_to(scaled_target.Get(), current, {}, edge, false, text_scale,
-                                         false, false, {}));
+                checked(reused.render_to(scaled_target.Get(), current, graphics_only(), edge, false,
+                                         text_scale, false, false, {}));
                 Renderer fresh;
                 const auto actual = pixels(scaled_bitmap.Get(), scaled_width, scaled_height);
-                checked(fresh.render_to(scaled_target.Get(), current, {}, edge, false, text_scale,
-                                        false, false, {}));
+                checked(fresh.render_to(scaled_target.Get(), current, graphics_only(), edge, false,
+                                        text_scale, false, false, {}));
                 require(actual == pixels(scaled_bitmap.Get(), scaled_width, scaled_height),
                         "Temperature DPI/text-scale transition equals fresh rendering");
             }
@@ -1250,7 +1261,7 @@ void temperature_ramp_render_tests(IWICImagingFactory *wic, ID2D1Factory *factor
                                      192),
         &target));
     auto snapshot = fixture();
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.cpu_squares = true;
     for (auto &p : snapshot.processors) {
         p.utilization.value = 40;
@@ -1349,11 +1360,11 @@ void temperature_invalidation_tests() {
     Renderer renderer;
     auto before = fixture();
     before.gpu_temperature.metric = {58, Status::valid, Unit::celsius, Clock::now()};
-    checked(renderer.paint(window.value, before, {}, Edge::top, false, 1));
+    checked(renderer.paint(window.value, before, graphics_only(), Edge::top, false, 1));
     const auto invalidates = [&](double temperature) {
         auto after = before;
         after.gpu_temperature.metric.value = temperature;
-        return renderer.invalidate_changes(window.value, before, after, {});
+        return renderer.invalidate_changes(window.value, before, after, graphics_only());
     };
     require(!invalidates(58.1), "Sub-degree change avoids a resting repaint");
     require(invalidates(58.5), "Temperature-only integer change repaints");
@@ -1370,9 +1381,9 @@ void temperature_invalidation_tests() {
     require(!invalidates(95.1), "Saturated glow avoids a repaint for an unchanged integer");
     auto absent = before;
     absent.gpu_temperature = {};
-    require(renderer.invalidate_changes(window.value, before, absent, {}),
+    require(renderer.invalidate_changes(window.value, before, absent, graphics_only()),
             "Temperature removal rebuilds layout");
-    Settings disabled;
+    Settings disabled{.always_show_readout = false};
     disabled.show_temperatures = false;
     require(renderer.invalidate_changes(window.value, before, before, disabled),
             "Disabling temperatures requests a layout repaint");
@@ -1389,7 +1400,7 @@ void temperature_invalidation_tests() {
         require(renderer.layout_revision() == revision,
                 "Disabled temperature-only changes preserve cached layout");
     }
-    require(renderer.invalidate_changes(window.value, before, before, {}),
+    require(renderer.invalidate_changes(window.value, before, before, graphics_only()),
             "Re-enabling retained temperatures requests a layout repaint");
 }
 void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *factory) {
@@ -1401,7 +1412,7 @@ void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *f
           &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
         reading->metric = {95, Status::valid, Unit::celsius};
     }
-    Settings disabled;
+    Settings disabled{.always_show_readout = false};
     disabled.show_temperatures = false;
     for (Edge edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
         const UINT width = horizontal(edge) ? 1400 : 60;
@@ -1422,15 +1433,15 @@ void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *f
                        : S_OK;
         });
         for (bool contrast : {false, true}) {
-            checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, false, contrast,
-                                       {}));
+            checked(renderer.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1,
+                                       false, contrast, {}));
             const auto temperature_count = temperature_layouts;
             require(temperature_count >= 5, "All five temperature slots were exercised");
             bool hover_warmed{};
             for (bool hover : {true, false, true, false}) {
                 const auto count = all_layouts;
-                checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, hover,
-                                           contrast, {}));
+                checked(renderer.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1,
+                                           hover, contrast, {}));
                 require(temperature_layouts == temperature_count,
                         "Hover transitions reuse every unchanged temperature text layout");
                 if (hover_warmed) {
@@ -1440,8 +1451,8 @@ void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *f
                 hover_warmed = true;
                 const auto enabled = pixels(bitmap.Get(), width, height);
                 Renderer fresh;
-                checked(fresh.render_to(target.Get(), snapshot, {}, edge, false, 1, hover, contrast,
-                                        {}));
+                checked(fresh.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1,
+                                        hover, contrast, {}));
                 require(enabled == pixels(bitmap.Get(), width, height),
                         "Dedicated temperature cache preserves enabled pixels");
             }
@@ -1451,8 +1462,8 @@ void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *f
                                            contrast, {}));
                 const auto hidden = pixels(bitmap.Get(), width, height);
                 Renderer original;
-                checked(original.render_to(target.Get(), absent, {}, edge, false, 1, hover,
-                                           contrast, {}));
+                checked(original.render_to(target.Get(), absent, graphics_only(), edge, false, 1,
+                                           hover, contrast, {}));
                 require(hidden == pixels(bitmap.Get(), width, height) &&
                             temperature_layouts == count,
                         "Disabled temperatures match sensor-free rendering without thermal text, "
@@ -1466,24 +1477,198 @@ void temperature_visibility_cache_tests(IWICImagingFactory *wic, ID2D1Factory *f
             }
         }
         reject_temperature = true;
-        require(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, false, false, {}) ==
-                    E_OUTOFMEMORY,
+        require(renderer.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1, false,
+                                   false, {}) == E_OUTOFMEMORY,
                 "Temperature text creation failure reaches resource recovery");
         reject_temperature = false;
-        checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        checked(renderer.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1, true,
+                                   false, {}));
         const auto recovered = pixels(bitmap.Get(), width, height);
         Renderer fresh;
-        checked(fresh.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        checked(fresh.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1, true,
+                                false, {}));
         require(recovered == pixels(bitmap.Get(), width, height),
                 "Temperature cache recovers completely after failed layout creation");
         const auto count = temperature_layouts;
         renderer.preferences_changed();
-        checked(renderer.render_to(target.Get(), snapshot, {}, edge, false, 1, true, false, {}));
+        checked(renderer.render_to(target.Get(), snapshot, graphics_only(), edge, false, 1, true,
+                                   false, {}));
         require(temperature_layouts == count + 5 &&
                     recovered == pixels(bitmap.Get(), width, height),
                 "Font preference invalidation rebuilds all temperature slots without visual drift");
     }
 }
+void readout_render_tests(IWICImagingFactory *wic, ID2D1Factory *factory,
+                          const std::filesystem::path &directory) {
+    using namespace loadbar;
+    Microsoft::WRL::ComPtr<IDWriteFactory> write;
+    checked(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                reinterpret_cast<IUnknown **>(write.GetAddressOf())));
+    EmbeddedFont font;
+    checked(font.initialize(write.Get()));
+    struct TextFit {
+        std::wstring_view text;
+        float width;
+        bool secondary;
+    };
+    using namespace strip_style;
+    const std::array samples{TextFit{L"100%", kCpuReadoutWidth, false},
+                             TextFit{L"P100 E100", kHybridReadoutWidth, true},
+                             TextFit{L"1023/1023G", kRamReadoutWidth, true},
+                             TextFit{L"<0.1/63.4G", kRamReadoutWidth, true},
+                             TextFit{L"<0.1B ▶100%", kGpuReadoutWidth, true},
+                             TextFit{L"R<0.1B W<0.1B", kDiskReadoutWidth, true},
+                             TextFit{L"R1023K W1023K", kDiskReadoutWidth, true},
+                             TextFit{L"↓<0.1B", kNetworkReadoutWidth, false},
+                             TextFit{L"↑1023K", kNetworkReadoutWidth, true},
+                             TextFit{L"—", kCpuReadoutWidth, false}};
+    for (const float scale : {1.0F, 1.5F, 2.25F, 6.0F}) {
+        for (const auto &sample : samples) {
+            const float width = sample.width * scale;
+            Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
+            checked(write->CreateTextFormat(
+                L"Geist Mono", font.collection(),
+                sample.secondary ? DWRITE_FONT_WEIGHT_NORMAL : DWRITE_FONT_WEIGHT_MEDIUM,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                (sample.secondary ? 9.0F : 11.0F) * scale, L"", &format));
+            checked(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+            checked(format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
+            Microsoft::WRL::ComPtr<IDWriteTextLayout> text;
+            checked(write->CreateTextLayout(sample.text.data(),
+                                            static_cast<UINT32>(sample.text.size()), format.Get(),
+                                            width, 11 * scale, &text));
+            DWRITE_TEXT_METRICS metrics{};
+            DWRITE_OVERHANG_METRICS overhang{};
+            DWRITE_LINE_METRICS line{};
+            UINT32 lines{};
+            checked(text->GetMetrics(&metrics));
+            checked(text->GetOverhangMetrics(&overhang));
+            checked(text->GetLineMetrics(&line, 1, &lines));
+            const float baseline =
+                (sample.secondary ? kReadoutSecondaryBaseline : kReadoutPrimaryBaseline) * scale;
+            const float y = baseline - metrics.top - line.baseline;
+            require(metrics.width <= width && metrics.lineCount == 1 && overhang.left <= 0 &&
+                        overhang.right <= 0 && y - overhang.top >= -0.01F &&
+                        y + 11 * scale + overhang.bottom <= kReadoutBand * scale + 0.01F,
+                    "Maximum formatted readout fits its column and explicit baseline band");
+        }
+    }
+    auto snapshot = fixture();
+    for (auto *t : {&snapshot.cpu_temperature, &snapshot.gpu_temperature,
+                    &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
+        t->metric = {58, Status::valid, Unit::celsius};
+    }
+    for (const auto edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
+        for (const float length : {1400.0F, 1600.0F}) {
+            const std::wstring suffix = length == 1400 ? L"" : L"-1600";
+            for (const auto dpi : {96.0F, 144.0F, 192.0F}) {
+                for (const bool contrast : {false, true}) {
+                    Settings settings;
+                    settings.cpu_squares = true;
+                    const float width = horizontal(edge) ? length : 60.0F;
+                    const float height = horizontal(edge) ? 60.0F : length;
+                    const auto pw = static_cast<UINT>(width * dpi / 96);
+                    const auto ph = static_cast<UINT>(height * dpi / 96);
+                    Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+                    checked(wic->CreateBitmap(pw, ph, GUID_WICPixelFormat32bppPBGRA,
+                                              WICBitmapCacheOnLoad, &bitmap));
+                    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+                    auto properties = D2D1::RenderTargetProperties();
+                    properties.dpiX = dpi;
+                    properties.dpiY = dpi;
+                    checked(
+                        factory->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target));
+                    unsigned layouts{};
+                    Renderer renderer([&](Renderer::ResourceKind kind, unsigned) {
+                        layouts += kind == Renderer::ResourceKind::text;
+                        return S_OK;
+                    });
+                    const auto render = [&](const Snapshot &data, const Settings &preferences,
+                                            bool hover) {
+                        checked(renderer.render_to(target.Get(), data, preferences, edge, false, 1,
+                                                   hover, contrast, {}));
+                        return pixels(bitmap.Get(), pw, ph);
+                    };
+                    const auto resting = render(snapshot, settings, false);
+                    if (dpi == 96 && !contrast) {
+                        bool fail = true;
+                        Renderer retry([&](Renderer::ResourceKind kind, unsigned index) {
+                            return fail && kind == Renderer::ResourceKind::text && index == 1
+                                       ? E_FAIL
+                                       : S_OK;
+                        });
+                        require(retry.render_to(target.Get(), snapshot, settings, edge, false, 1,
+                                                false, false, {}) == E_FAIL,
+                                "Readout text failure enters normal resource recovery");
+                        fail = false;
+                        checked(retry.render_to(target.Get(), snapshot, settings, edge, false, 1,
+                                                false, false, {}));
+                        require(pixels(bitmap.Get(), pw, ph) == resting,
+                                "Readout retry restores clip, transform and complete text");
+                    }
+                    const auto built = layouts;
+                    require(built > 6, "Always-on readouts create text without hover");
+                    const auto revision = renderer.layout_revision();
+                    require(render(snapshot, settings, true) == resting && layouts == built &&
+                                renderer.layout_revision() == revision,
+                            "Always-on hover reuses layouts and changes no pixels");
+                    settings.show_hover_info = false;
+                    require(render(snapshot, settings, false) == resting,
+                            "Always-on readouts are independent of saved hover preference");
+                    auto changed = snapshot;
+                    changed.gpu_memory_bytes.value = 11.5 * 1073741824;
+                    require(render(changed, settings, false) != resting &&
+                                renderer.layout_revision() == revision,
+                            "Capacity-only changes refresh readouts without reflow");
+                    require(layouts == built + 1,
+                            "One changed readout reuses all unrelated text layouts");
+                    render(snapshot, settings, false);
+                    if (dpi == 96 && !contrast) {
+                        save(wic, bitmap.Get(),
+                             directory / std::format(L"readout-{}{}-normal.png",
+                                                     static_cast<unsigned>(edge), suffix));
+                        for (auto &p : changed.processors) {
+                            p.utilization.value = 100;
+                        }
+                        for (auto *t :
+                             {&changed.cpu_temperature, &changed.gpu_temperature,
+                              &changed.disks[0].temperature, &changed.disks[1].temperature}) {
+                            t->metric.value = 95;
+                        }
+                        for (auto &disk : changed.disks) {
+                            disk.active.value = 92;
+                        }
+                        render(changed, settings, false);
+                        save(wic, bitmap.Get(),
+                             directory / std::format(L"readout-{}{}-heavy.png",
+                                                     static_cast<unsigned>(edge), suffix));
+                        auto uniform = snapshot;
+                        uniform.processors.resize(4);
+                        for (unsigned i = 0; i < 4; ++i) {
+                            uniform.processors[i].core = i;
+                            uniform.processors[i].efficiency_class = 0;
+                        }
+                        render(uniform, settings, false);
+                        save(wic, bitmap.Get(),
+                             directory / std::format(L"readout-{}{}-4-core.png",
+                                                     static_cast<unsigned>(edge), suffix));
+                    }
+                    settings.always_show_readout = false;
+                    const auto disabled = render(snapshot, settings, true);
+                    Renderer fresh;
+                    checked(fresh.render_to(target.Get(), snapshot, settings, edge, false, 1, true,
+                                            contrast, {}));
+                    require(disabled == pixels(bitmap.Get(), pw, ph),
+                            "Disabling readouts equals fresh graphics-only rendering");
+                    settings.always_show_readout = true;
+                    require(render(snapshot, settings, false) == resting,
+                            "Readout off/on restores layout and cached appearance");
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 int wmain(int argc, wchar_t **argv) {
     try {
@@ -1496,6 +1681,7 @@ int wmain(int argc, wchar_t **argv) {
         checked(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.GetAddressOf()));
         const std::filesystem::path directory(argv[1]);
         std::filesystem::create_directories(directory);
+        readout_render_tests(wic.Get(), factory.Get(), directory);
         temperature_render_tests(wic.Get(), factory.Get(), directory);
         temperature_ramp_render_tests(wic.Get(), factory.Get(), directory);
         temperature_reference_previews(wic.Get(), factory.Get(), directory);
@@ -1522,7 +1708,7 @@ int wmain(int argc, wchar_t **argv) {
                 const unsigned dip_height =
                     horizontal ? static_cast<unsigned>(loadbar::minimum_thickness(
                                      static_cast<float>(dip_width), 480, loadbar::Edge::top,
-                                     fixture().processors, 1, {}, 2))
+                                     fixture().processors, 1, graphics_only(), 2))
                                : 1000U;
                 require(dip_height <= 1000, "Fixture layout must fit");
                 const unsigned width = (dip_width * dpi + 95) / 96,
@@ -1545,7 +1731,7 @@ int wmain(int argc, wchar_t **argv) {
                     return S_OK;
                 });
                 auto snapshot = fixture();
-                loadbar::Settings settings;
+                loadbar::Settings settings{.always_show_readout = false};
                 checked(renderer.render_to(target.Get(), snapshot, settings,
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
                                            false, 1, false, false, {}));

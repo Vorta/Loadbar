@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <map>
 
 namespace loadbar {
@@ -188,6 +189,136 @@ std::wstring cpu_summary(const Snapshot &snapshot, const Settings &settings,
             e_count += it->second.second;
         }
         result += std::format(L"  P {:.0f}%  E {:.0f}%", p_sum / p_count, e_sum / e_count);
+    }
+    return result;
+}
+std::wstring readout_quantity(MetricView source) {
+    const auto metric = presented_metric(source);
+    if (metric.status != Status::valid || !std::isfinite(metric.value) || metric.value < 0) {
+        return L"—";
+    }
+    if (metric.unit == Unit::percent) {
+        return std::format(L"{:.0f}%", metric.value);
+    }
+    constexpr std::array units{L"B", L"K", L"M", L"G", L"T", L"P", L"E"};
+    double value = metric.value;
+    std::size_t unit{};
+    while (value >= 1024 && unit + 1 < units.size()) {
+        value /= 1024;
+        ++unit;
+    }
+    if (value == 0) {
+        return L"0";
+    }
+    if (value < 0.1) {
+        return std::format(L"<0.1{}", units[unit]);
+    }
+    // At most one decimal. Promote rounded boundaries instead of showing 1024K.
+    value = value < 100 ? std::round(value * 10) / 10 : std::round(value);
+    if (value >= 1024 && unit + 1 < units.size()) {
+        value /= 1024;
+        ++unit;
+    }
+    if (value >= 100 || (value >= 10 && std::floor(value) == value)) {
+        return std::format(L"{:.0f}{}", value, units[unit]);
+    }
+    return std::format(L"{:.1f}{}", value, units[unit]);
+}
+Readout component_readout(unsigned kind, std::size_t disk, const Snapshot &s,
+                          const Settings &settings, Clock::time_point now) {
+    Readout result;
+    const auto shown = [&](MetricView m) {
+        return presented_metric(aged_metric(m, now, settings.interval_ms));
+    };
+    const auto part = [&](Gauge gauge, std::wstring_view prefix = L"") {
+        return ReadoutPart{std::wstring(prefix) +
+                               readout_quantity(shown(s.gauges[static_cast<std::size_t>(gauge)])),
+                           gauge_palette(gauge).text};
+    };
+    if (kind == 0) {
+        result.primary = {L"—", kPrimary};
+        double total{}, p_total{}, e_total{};
+        unsigned highest{}, lowest = std::numeric_limits<unsigned>::max();
+        bool classified = true;
+        for (const auto &cpu : s.processors) {
+            if (!cpu.efficiency_class) {
+                classified = false;
+            } else {
+                highest = std::max(highest, *cpu.efficiency_class);
+                lowest = std::min(lowest, *cpu.efficiency_class);
+            }
+        }
+        std::size_t p_count{}, e_count{};
+        for (const auto &cpu : s.processors) {
+            const auto metric = shown(cpu.utilization);
+            if (metric.status != Status::valid || !std::isfinite(metric.value)) {
+                return result;
+            }
+            total += metric.value;
+            if (cpu.efficiency_class && *cpu.efficiency_class == highest) {
+                p_total += metric.value;
+                ++p_count;
+            } else {
+                e_total += metric.value;
+                ++e_count;
+            }
+        }
+        if (!s.processors.empty()) {
+            result.primary.text =
+                std::format(L"{:.0f}%", total / static_cast<double>(s.processors.size()));
+        }
+        if (classified && highest > lowest && p_count && e_count) {
+            result.secondary[0] = {std::format(L"P{:.0f}", p_total / static_cast<double>(p_count)),
+                                   kSecondary};
+            result.secondary[1] = {std::format(L"E{:.0f}", e_total / static_cast<double>(e_count)),
+                                   kSecondary};
+        }
+    } else if (kind == 1) {
+        result.primary = part(Gauge::ram);
+        const auto used = shown(s.ram_used_bytes);
+        const auto percent = shown(s.gauges[static_cast<std::size_t>(Gauge::ram)]);
+        std::wstring capacity = L"—";
+        if (used.status == Status::valid && percent.status == Status::valid &&
+            used.unit == Unit::bytes && std::isfinite(used.value) && used.value >= 0 &&
+            s.ram_total_bytes > 0 && used.value <= static_cast<double>(s.ram_total_bytes)) {
+            constexpr std::array units{L"G", L"T", L"P", L"E"};
+            double divisor = 1073741824.0;
+            std::size_t unit{};
+            while (static_cast<double>(s.ram_total_bytes) / divisor >= 1024 &&
+                   unit + 1 < units.size()) {
+                divisor *= 1024;
+                ++unit;
+            }
+            const auto number = [](double value, bool total) {
+                if (value > 0 && value < 0.1) {
+                    return std::wstring(L"<0.1");
+                }
+                return value >= 100 || (total && std::floor(value) == value)
+                           ? std::format(L"{:.0f}", value)
+                           : std::format(L"{:.1f}", value);
+            };
+            capacity = number(used.value / divisor, false) + L"/" +
+                       number(static_cast<double>(s.ram_total_bytes) / divisor, true) +
+                       units.at(unit);
+        }
+        result.secondary[0] = {std::move(capacity), gauge_palette(Gauge::ram).text};
+    } else if (kind == 2) {
+        result.primary = part(Gauge::gpu_3d);
+        if (gpu_memory_visible(s)) {
+            result.secondary[0] = {readout_quantity(shown(s.gpu_memory_bytes)),
+                                   gauge_palette(Gauge::gpu_memory).text};
+        }
+        result.secondary[1] = part(Gauge::gpu_decode, L"▶");
+    } else if (kind == 3 && disk < s.disks.size()) {
+        result.primary = {readout_quantity(shown(s.disks[disk].active)),
+                          gauge_palette(Gauge::disk_active).text};
+        result.secondary[0] = {L"R" + readout_quantity(shown(s.disks[disk].read)),
+                               gauge_palette(Gauge::disk_read).text};
+        result.secondary[1] = {L"W" + readout_quantity(shown(s.disks[disk].write)),
+                               gauge_palette(Gauge::disk_write).text};
+    } else if (kind == 4) {
+        result.primary = part(Gauge::download, L"↓");
+        result.secondary[0] = part(Gauge::upload, L"↑");
     }
     return result;
 }

@@ -64,13 +64,14 @@ void check_checkbox_background(HWND checkbox) {
 }
 void drive_settings_tests() {
     using namespace loadbar;
-    for (unsigned mask = 0; mask < 32; ++mask) {
+    for (unsigned mask = 0; mask < 64; ++mask) {
         Settings switches;
         switches.cpu_squares = (mask & 1U) != 0;
         switches.show_hover_info = (mask & 2U) != 0;
         switches.open_task_manager_on_click = (mask & 4U) != 0;
         switches.show_tooltips = (mask & 8U) != 0;
         switches.show_temperatures = (mask & 16U) != 0;
+        switches.always_show_readout = (mask & 32U) != 0;
         check(decode_settings(encode_settings(switches)) == switches,
               "All preference combinations round trip");
         check(collection_changed({}, switches) == !switches.show_temperatures,
@@ -79,7 +80,7 @@ void drive_settings_tests() {
     const auto legacy = decode_settings(L"Loadbar 9 0 40 1000 \"\" \"gpu\" \"nic\" 0 1 1 0 0");
     check(legacy && !legacy->cpu_squares && legacy->show_hover_info &&
               legacy->open_task_manager_on_click && legacy->show_tooltips &&
-              legacy->show_temperatures,
+              legacy->show_temperatures && legacy->always_show_readout,
           "Existing settings receive backward-compatible interaction defaults");
     const auto prefix10 = L"Loadbar 10 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 ";
     for (const auto *tail : {L"", L"0 1", L"2 1 1", L"0 2 1", L"0 1 -1", L"0 1 1 extra"}) {
@@ -106,6 +107,17 @@ void drive_settings_tests() {
     for (const auto *tail : {L"", L"2", L"-1", L"true", L"0 extra"}) {
         check(!decode_settings(std::wstring(prefix12) + tail),
               "Temperature preference rejects missing, malformed and trailing fields");
+    }
+    for (const auto *tail : {L"0", L"1"}) {
+        const auto previous = decode_settings(std::wstring(prefix12) + tail);
+        check(previous && previous->always_show_readout &&
+                  previous->show_temperatures == (tail[0] == L'1'),
+              "Schema twelve enables readouts while preserving temperature choice");
+    }
+    const auto prefix13 = L"Loadbar 13 0 40 1000 \"\" \"\" \"\" 0 1 1 0 0 0 1 1 1 1 ";
+    for (const auto *tail : {L"", L"2", L"-1", L"true", L"0 extra"}) {
+        check(!decode_settings(std::wstring(prefix13) + tail),
+              "Readout preference rejects missing, malformed and trailing fields");
     }
     Settings settings;
     check(settings.hidden_disks.empty() && disk_visible(L"new", settings), "New disks are visible");
@@ -277,7 +289,7 @@ void migration_tests() {
         Settings settings;
         settings.thickness = value;
         check(valid_settings(settings) && decode_settings(encode_settings(settings)) == settings &&
-                  encode_settings(settings).starts_with(L"Loadbar 12 "),
+                  encode_settings(settings).starts_with(L"Loadbar 13 "),
               "Current schema boundaries round trip");
     }
     for (const int version : {1, 2, 3, 4, 5, 6, 7}) {
@@ -589,8 +601,8 @@ struct SettingsWindowTests {
             check(label_colors, "Every label uses transparent text on system window background");
             SendMessageW(app.settings_window_, WM_SYSCOLORCHANGE, 0, 0);
             SendMessageW(app.settings_window_, WM_THEMECHANGED, 0, 0);
-            for (const int id :
-                 {kCpuSquares, kTemperatures, kHoverInfo, kTooltips, kTaskManagerClick}) {
+            for (const int id : {kCpuSquares, kTemperatures, kAlwaysReadout, kHoverInfo, kTooltips,
+                                 kTaskManagerClick}) {
                 const auto box = GetDlgItem(app.settings_content_, id);
                 check(box != nullptr, "Preference checkbox exists");
                 for (const auto state : {BST_UNCHECKED, BST_CHECKED}) {
@@ -612,6 +624,7 @@ struct SettingsWindowTests {
                 const auto draft = settings_from_draft(app.settings_draft());
                 check(draft && (id != kCpuSquares || draft->cpu_squares) &&
                           (id != kTemperatures || !draft->show_temperatures) &&
+                          (id != kAlwaysReadout || !draft->always_show_readout) &&
                           (id != kHoverInfo || !draft->show_hover_info) &&
                           (id != kTaskManagerClick || !draft->open_task_manager_on_click) &&
                           (id != kTooltips || !draft->show_tooltips),
@@ -628,8 +641,19 @@ struct SettingsWindowTests {
                                     FALSE) == GetDlgItem(app.settings_content_, kTemperatures) &&
                       GetNextDlgTabItem(app.settings_window_,
                                         GetDlgItem(app.settings_content_, kTemperatures),
-                                        FALSE) == GetDlgItem(app.settings_content_, kHoverInfo),
-                  "Temperature checkbox sits after CPU squares in native keyboard order");
+                                        FALSE) == GetDlgItem(app.settings_content_, kAlwaysReadout),
+                  "Readout checkbox follows temperatures in native keyboard order");
+            const auto always = GetDlgItem(app.settings_content_, kAlwaysReadout);
+            const auto hover_box = GetDlgItem(app.settings_content_, kHoverInfo);
+            check(!IsWindowEnabled(hover_box) &&
+                      GetNextDlgTabItem(app.settings_window_, always, FALSE) ==
+                          GetDlgItem(app.settings_content_, kTooltips),
+                  "Always-on default disables and skips the saved hover preference");
+            SendMessageW(always, BM_CLICK, 0, 0);
+            check(IsWindowEnabled(hover_box) &&
+                      SendMessageW(hover_box, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+                      GetNextDlgTabItem(app.settings_window_, always, FALSE) == hover_box,
+                  "Disabling readouts restores the saved hover choice and keyboard access");
             check(GetNextDlgTabItem(app.settings_window_,
                                     GetDlgItem(app.settings_content_, kHoverInfo),
                                     FALSE) == GetDlgItem(app.settings_content_, kTooltips) &&
@@ -637,6 +661,10 @@ struct SettingsWindowTests {
                                         GetDlgItem(app.settings_content_, kTooltips), FALSE) ==
                           GetDlgItem(app.settings_content_, kTaskManagerClick),
                   "Tooltip checkbox follows hover info in native keyboard order");
+            app.cancel_settings();
+            check(!IsWindowEnabled(hover_box) &&
+                      SendMessageW(always, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                  "Cancel restores readout default and dependent hover enabled state");
             // Real EN_CHANGE travels through the content host to the Settings callback.
             SetWindowTextW(field(4), L"60");
             check(enabled(kApplySettings) && enabled(kCancelSettings),

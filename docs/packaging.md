@@ -1,5 +1,32 @@
 # Packaging and release evidence
 
+## 1.3.0 release artifact
+
+The final `out/build/windows-x64-release/Loadbar.exe` built on 2026-10-09 reports file/product
+version 1.3.0 and author Vorta. It is 1,383,936 bytes; SHA-256 is
+`ddf03d8fcb1d3518df2cddef02bfe56aa319a925954e4c8e737456cac87fc443`.
+The final `pwsh -NoProfile -File scripts/package-release.ps1` configure/build and Release
+CTest run passed all four suites (5.89 s). It staged the identical executable and verified
+that the ZIP contains only that executable, byte-for-byte. Packaging log: `out/v130-package.log`.
+
+| Asset | SHA-256 |
+| --- | --- |
+| Loadbar.exe | `ddf03d8fcb1d3518df2cddef02bfe56aa319a925954e4c8e737456cac87fc443` |
+| Loadbar-1.3.0-windows-x64.zip | `e491ab99c65507a224bba88e6816417706e06c63a10270979d41eac668107201` |
+
+`dumpbin /dependents` lists only Windows
+components, with no application/CRT/ASan DLL dependency. `/headers` confirms x64 GUI,
+CFG, ASLR, DEP, high-entropy VA and an empty delay-import directory. These checks were repeated
+on the staged executable; logs are `out/v130-{dependents,headers}.log`. The dynamic-load audit
+still finds only the existing System32-restricted installed-driver temperature loader.
+
+The owner approved the implementation and requested 1.3.0 publication after the remaining
+validation gaps were disclosed. The live AppBar was not launched or changed by the agent;
+the existing, hash-matched process was passively observed for ten minutes. Clean-machine
+execution and the full interactive/performance/hardware gates remain pending. See
+[performance evidence](performance-review-1.3.0.md), [testing](testing.md) and
+[release notes](releases/1.3.0.md). Publication does not establish that these gates passed.
+
 ## 1.2.0 release artifact
 
 Packaged on 2026-10-09 with `pwsh -NoProfile -File scripts/package-release.ps1` after the

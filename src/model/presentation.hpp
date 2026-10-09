@@ -50,4 +50,16 @@ struct Palette {
 [[nodiscard]] std::wstring compact_value(MetricView metric);
 [[nodiscard]] std::wstring cpu_summary(const Snapshot &snapshot, const Settings &settings,
                                        Clock::time_point now);
+struct ReadoutPart {
+    std::wstring text;
+    Color color;
+};
+struct Readout {
+    ReadoutPart primary;
+    std::array<ReadoutPart, 2> secondary;
+};
+// Compact binary units used only in the reserved readout columns (rates imply /s).
+[[nodiscard]] std::wstring readout_quantity(MetricView metric);
+[[nodiscard]] Readout component_readout(unsigned kind, std::size_t disk, const Snapshot &snapshot,
+                                        const Settings &settings, Clock::time_point now);
 } // namespace loadbar

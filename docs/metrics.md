@@ -366,3 +366,19 @@ drive then opens fresh queries and primes them; toggling one drive while others 
 does not reset shared counters. Discovery continues while hidden. New identities automatically
 collect and display; a reconnected excluded identity remains hidden even if its disk number changes.
 The empty-discovery unavailable widget is distinct from an inventory whose disks are all hidden.
+
+## Always-visible summaries (1.3.0)
+
+Readout columns consume existing snapshots; they add no counter or sensor queries. CPU total
+is the arithmetic mean of the displayed logical-processor observations, preserving SMT
+weighting. For completely classified hybrid topology, P is the highest efficiency class and
+E is the remaining classes, matching the existing hover policy. Any never-observed failed
+logical processor makes the total unavailable; per-processor retained values and warm-up
+zeros otherwise follow normal display continuity. These summaries never replace the tiles.
+
+RAM percentage and used/total capacity use the same observation. GPU memory retains its
+selected dedicated/shared scope, amount and capacity through failures; the readout omits it
+only before the first valid memory observation. Disk and network directions remain separate
+and use current rates, not peaks. The new compact byte suffixes are binary B/K/M/G/T/P/E;
+rate suffixes imply /s. Explicit units, raw statuses, scopes and original ages remain in
+Settings and tooltips. No readout value feeds back into telemetry or scaling.

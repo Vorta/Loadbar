@@ -100,6 +100,8 @@ void Application::create_settings() {
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kCpuSquares);
         child(settings_content_, instance_, L"BUTTON", L"Show t&emperatures",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kTemperatures);
+        child(settings_content_, instance_, L"BUTTON", L"Always show &readout",
+              WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kAlwaysReadout);
         child(settings_content_, instance_, L"BUTTON", L"Show info on &hover",
               WS_TABSTOP | BS_AUTOCHECKBOX | BS_NOTIFY | BS_MULTILINE, kHoverInfo);
         child(settings_content_, instance_, L"BUTTON", L"Show toolti&ps",
@@ -179,6 +181,8 @@ void Application::populate_settings() {
                    settings_.show_temperatures ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kTooltips,
                    settings_.show_tooltips ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(settings_content_, kAlwaysReadout,
+                   settings_.always_show_readout ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kHoverInfo,
                    settings_.show_hover_info ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(settings_content_, kTaskManagerClick,
@@ -497,8 +501,8 @@ void Application::layout_settings() {
         }
         position(field(settings_content_, static_cast<int>(i)), bounds);
     }
-    constexpr std::array preference_ids{kCpuSquares, kTemperatures, kHoverInfo, kTooltips,
-                                        kTaskManagerClick};
+    constexpr std::array preference_ids{kCpuSquares, kTemperatures, kAlwaysReadout,
+                                        kHoverInfo,  kTooltips,     kTaskManagerClick};
     for (std::size_t i = 0; i < preference_ids.size(); ++i) {
         position(GetDlgItem(settings_content_, preference_ids[i]), layout.preferences[i]);
     }
@@ -569,6 +573,8 @@ SettingsDraft Application::settings_draft() const {
     draft.hidden_disks = draft_hidden_disks_;
     draft.cpu_squares = IsDlgButtonChecked(settings_content_, kCpuSquares) == BST_CHECKED;
     draft.show_temperatures = IsDlgButtonChecked(settings_content_, kTemperatures) == BST_CHECKED;
+    draft.always_show_readout =
+        IsDlgButtonChecked(settings_content_, kAlwaysReadout) == BST_CHECKED;
     draft.show_hover_info = IsDlgButtonChecked(settings_content_, kHoverInfo) == BST_CHECKED;
     draft.show_tooltips = IsDlgButtonChecked(settings_content_, kTooltips) == BST_CHECKED;
     draft.open_task_manager_on_click =
@@ -590,7 +596,13 @@ void Application::update_settings_actions() {
             choice_ids_[i][1] = choice_ids_[i][static_cast<std::size_t>(index)];
         }
     }
-    settings_dirty_ = settings_dirty(settings_draft(), settings_);
+    const auto draft = settings_draft();
+    const auto hover = GetDlgItem(settings_content_, kHoverInfo);
+    if (draft.always_show_readout && GetFocus() == hover) {
+        SetFocus(GetDlgItem(settings_content_, kAlwaysReadout));
+    }
+    EnableWindow(hover, !draft.always_show_readout);
+    settings_dirty_ = settings_dirty(draft, settings_);
     for (const auto id : {kApplySettings, kCancelSettings}) {
         const auto control = settings_control(id);
         if (!settings_dirty_ && GetFocus() == control) {

@@ -18,6 +18,7 @@ inline constexpr int kHoverInfo = 1024;
 inline constexpr int kTaskManagerClick = 1025;
 inline constexpr int kTooltips = 1026;
 inline constexpr int kTemperatures = 1027;
+inline constexpr int kAlwaysReadout = 1028;
 inline constexpr int kDrivesLabel = 2008;
 inline constexpr int kFirstLabel = 2000;
 } // namespace loadbar

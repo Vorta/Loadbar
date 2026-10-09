@@ -1,13 +1,22 @@
 # Performance
 
-**The current 1.2.0 worktree has an independent review and passive ten-minute observation in
-[the new performance review](performance-review-1.2.0.md).** At the existing 250 ms cadence,
+**The final 1.3.0 Release executable has a fresh ten-minute passive observation and an
+independent performance review in [the 1.3.0 evidence](performance-review-1.3.0.md).** At the
+existing 250 ms cadence with readouts off, it measured **12.51 ms/s CPU**, **67.09 MiB median
+private bytes** and **72.88 MiB median working set**. Memory and resource counts were stable
+over the interval. CPU/private memory exceeded the provisional targets in this configuration;
+the controlled 1-Hz gate, readout-on measurements and one-hour soak remain pending.
+
+## Historical 1.2.0 observation
+
+**The 1.2.0 implementation has an independent review and passive ten-minute observation in
+[the 1.2.0 review](performance-review-1.2.0.md).** At the existing 250 ms cadence,
 it measured 14.38 ms/s process CPU, median 67.31 MiB private bytes and 59.90 MiB working set.
 The report identified vendor capability retries, hover/text cache churn and small hidden-drive
 scratch retention. All three improvements are implemented with deterministic regression tests;
 the earlier live observation does not measure the resulting savings.
 
-The new **Show temperatures** switch stops temperature opens/reads and vendor probing while
+The **Show temperatures** switch stops temperature opens/reads and vendor probing while
 disabled, releases idle sensor resources, and excludes temperatures from paint/deadline work.
 Pending canceled requests retain their buffers until completion. Temperature text uses its
 own bounded component slots, so hover transitions reuse it. Confirmed missing vendor capability
@@ -18,6 +27,36 @@ comparison. Both observations used existing 250 ms horizontal configurations; th
 1 Hz performance gate remains pending. Automated test durations and offscreen probes do not
 establish production overhead. See
 [AGENTS.md](../AGENTS.md#performance-gate) for the targets and required conditions.
+
+## Always-visible readouts (1.3.0)
+
+An independent performance subagent reviewed rendering/layout caches, sampling/handoff,
+hidden-provider handling, retention and resource cleanup on 2026-10-09. It found no actionable
+performance or resource-usage issue, so no speculative optimization was made. It ran:
+
+```powershell
+./out/build/windows-x64-release/loadbar_render_tests.exe ./out/performance-review-v130-render
+```
+
+The command exited 0: 24 continuity/resize cases, 49 scaling cases and 65 offscreen fixtures
+passed, including readout cache reuse, changed-slot replacement and resource reconstruction.
+This is source review and regression evidence, not a production CPU/RAM measurement. Controlled
+Release measurements and the one-hour lifetime soak remain pending for 1.3.0.
+
+Readouts are presentation-only: toggling them does not reconfigure collectors or reset rate
+baselines/peaks. They use three bounded text-cache slots per visible component, independent
+of temperature and hover caches. Hover entry/exit skips bar invalidation while readouts are
+on. Layout dimensions do not depend on live numeric text.
+
+Component-specific readout widths use bounded prefix sums during layout, so wrapping does
+not repeatedly measure text. Font baselines are obtained only when a cached text layout is
+created; unchanged paints reuse them. The spacing/typography correction adds no sampling or timers.
+
+Production-renderer offscreen tests verify zero new text layouts on unchanged rest/hover
+transitions and exactly one new layout when only the GPU memory amount changes. Formatting
+still runs for components during a paint; the cached DirectWrite layouts are reused. No
+whole-process CPU/RAM saving or controlled production-overhead result is claimed. The
+existing 1-Hz measurement, GPU/DWM comparison and one-hour soak gates remain pending.
 
 ## Temperature spacing update (1.2.0)
 

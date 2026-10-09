@@ -146,7 +146,38 @@ struct LayoutPlan {
     int columns{}, count{};
     std::vector<unsigned> kinds;
     float minimum_width{}, minimum_height{};
+    float gap{kWidgetGap};
+    float vertical_tail{kVerticalTail};
+    // Prefix sums let every wrapped row/column use its actual component widths.
+    std::vector<float> readout_offsets;
+    bool readouts() const {
+        return readout_offsets.back() > 0;
+    }
+    float readout_span(int first, int end) const {
+        return readout_offsets[static_cast<std::size_t>(end)] -
+               readout_offsets[static_cast<std::size_t>(first)];
+    }
+    float readout_extent(int index) const {
+        return readout_span(index, index + 1);
+    }
+    float group_overhead(int first, int end, bool horizontal, int slots) const {
+        return 2 * kMargin + static_cast<float>(slots - 1) * gap +
+               static_cast<float>(slots) * (horizontal ? kHeader : vertical_tail) +
+               readout_span(first, end) +
+               (horizontal && first == 0 && end == count ? gap + kDividerWidth : 0);
+    }
 };
+float cpu_readout_width(const std::vector<Processor> &processors) {
+    const auto first = processors.empty() ? std::nullopt : processors.front().efficiency_class;
+    bool hybrid = false;
+    for (const auto &processor : processors) {
+        if (!processor.efficiency_class) {
+            return kCpuReadoutWidth;
+        }
+        hybrid |= processor.efficiency_class != first;
+    }
+    return hybrid ? kHybridReadoutWidth : kCpuReadoutWidth;
+}
 bool valid_inputs(float width, float height, const std::vector<Processor> &processors,
                   float text_scale, std::size_t disk_count) {
     return std::isfinite(width) && std::isfinite(height) && width >= 1 && height >= 1 &&
@@ -168,33 +199,79 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
     if (settings.network_visible) {
         kinds.push_back(4);
     }
-    const auto count = static_cast<int>(kinds.size());
+    LayoutPlan plan;
+    plan.count = static_cast<int>(kinds.size());
+    plan.kinds = std::move(kinds);
+    plan.gap = settings.always_show_readout ? kReadoutWidgetGap : kWidgetGap;
+    // The former 16-DIP widget gap also supplied temperature clearance. Keep that
+    // clearance inside the vertical group when using the tighter readout gap.
+    if (settings.always_show_readout) {
+        plan.vertical_tail += kWidgetGap - kReadoutWidgetGap;
+    }
+    plan.readout_offsets.reserve(plan.kinds.size() + 1);
+    plan.readout_offsets.push_back(0);
+    for (const auto kind : plan.kinds) {
+        const float width_for_text =
+            kind == 0 ? cpu_readout_width(processors) : device_readout_width(kind);
+        plan.readout_offsets.push_back(
+            plan.readout_offsets.back() +
+            (settings.always_show_readout ? width_for_text + kReadoutGap : 0));
+    }
+    const int count = plan.count;
     if (!horizontal) {
-        const float available = w - 18;
-        if (available < 22) {
-            return std::nullopt;
+        // Wrap vertical widgets into columns when the edge cannot hold their readouts.
+        // The same plan feeds minimum-thickness negotiation and final arrangement.
+        for (int columns = 1; columns <= (settings.always_show_readout ? count : 1); ++columns) {
+            const int rows = (count + columns - 1) / columns;
+            const int used_columns = (count + rows - 1) / rows;
+            const float available = (w - 18 - static_cast<float>(used_columns - 1) * plan.gap) /
+                                    static_cast<float>(used_columns);
+            // Upright temperature labels can be 3.1 * 9 compact DIPs wide.
+            const float minimum_column = plan.readouts() && used_columns > 1 ? 28.0F : 22.0F;
+            if (available < minimum_column) {
+                continue;
+            }
+            const float overhead =
+                plan.group_overhead(0, rows, false, rows) + static_cast<float>(rows - 1) * 22;
+            const float budget = h - overhead;
+            if (budget < 48) {
+                continue;
+            }
+            auto cpu = cpu_grid(processors, budget, settings.cpu_squares);
+            if (cpu.band > available || cpu.preferred_width > budget) {
+                continue;
+            }
+            const float minimum_w =
+                18 + static_cast<float>(used_columns) * std::max(cpu.band, minimum_column) +
+                static_cast<float>(used_columns - 1) * plan.gap;
+            float used_h = overhead + std::max(cpu.preferred_width, 22.0F);
+            for (int first = rows; first < count; first += rows) {
+                const int end = std::min(first + rows, count);
+                used_h = std::max(used_h, plan.group_overhead(first, end, false, end - first) +
+                                              static_cast<float>(end - first) * 22);
+            }
+            if (used_h > h + 0.0001F) {
+                continue;
+            }
+            plan.cpu = std::move(cpu);
+            plan.columns = used_columns;
+            plan.minimum_width = minimum_w;
+            plan.minimum_height = used_h;
+            return plan;
         }
-        const float overhead = 2 * kMargin + static_cast<float>(count) * kVerticalTail +
-                               static_cast<float>(count - 1) * (22 + kWidgetGap);
-        const float budget = h - overhead;
-        if (budget < 48) {
-            return std::nullopt;
-        }
-        auto cpu = cpu_grid(processors, budget, settings.cpu_squares);
-        if (cpu.band > available || cpu.preferred_width > budget) {
-            return std::nullopt;
-        }
-        const float minimum_w = 18 + cpu.band;
-        const float used_h = overhead + cpu.preferred_width;
-        return LayoutPlan{std::move(cpu), 1, count, std::move(kinds), minimum_w, used_h};
+        return std::nullopt;
     }
     for (int cols = horizontal ? count : 1; cols >= 1; --cols) {
-        const float overhead = 2 * kMargin + static_cast<float>(cols - 1) * kWidgetGap +
-                               (cols == count ? kDividerExtra : 0.0F);
-        const float graphics = w - overhead - static_cast<float>(cols) * kHeader;
-        const float cpu_budget = graphics - static_cast<float>(cols - 1) * 48;
-        if (cpu_budget < (processors.empty() ? 48.0F : 6.0F) ||
-            (cols < count && graphics < static_cast<float>(cols) * 48)) {
+        const float overhead = plan.group_overhead(0, cols, true, cols);
+        const float cpu_budget = w - overhead - static_cast<float>(cols - 1) * 48;
+        float other_minimum{};
+        for (int first = cols; first < count; first += cols) {
+            const int end = std::min(first + cols, count);
+            const int slots = plan.readouts() ? end - first : cols;
+            other_minimum = std::max(other_minimum, plan.group_overhead(first, end, true, slots) +
+                                                        static_cast<float>(slots) * 48);
+        }
+        if (cpu_budget < (processors.empty() ? 48.0F : 6.0F) || other_minimum > w) {
             continue;
         }
         auto cpu = cpu_grid(processors, cpu_budget, settings.cpu_squares);
@@ -202,15 +279,15 @@ std::optional<LayoutPlan> compact_plan(float width, float height, bool horizonta
             continue;
         }
         const int rows = (count + cols - 1) / cols;
-        const float used_h =
-            static_cast<float>(rows) * cpu.band + static_cast<float>(rows - 1) * kWidgetGap + 18;
+        const float other_band = plan.readouts() ? 22 : cpu.band;
+        const float used_h = cpu.band + static_cast<float>(rows - 1) * (other_band + plan.gap) + 18;
         if (used_h <= h) {
-            const float minimum_graphics =
-                std::max(cpu.preferred_width + static_cast<float>(cols - 1) * 48,
-                         cols < count ? static_cast<float>(cols) * 48 : 0.0F);
-            const float minimum_w =
-                overhead + static_cast<float>(cols) * kHeader + minimum_graphics;
-            return LayoutPlan{std::move(cpu), cols, count, std::move(kinds), minimum_w, used_h};
+            plan.minimum_width = std::max(
+                overhead + cpu.preferred_width + static_cast<float>(cols - 1) * 48, other_minimum);
+            plan.cpu = std::move(cpu);
+            plan.columns = cols;
+            plan.minimum_height = used_h;
+            return plan;
         }
     }
     return std::nullopt;
@@ -360,43 +437,63 @@ Layout arrange_vertical(const LayoutPlan &plan, float width, float height, float
     if (w + 0.0001F < plan.minimum_width || h + 0.0001F < plan.minimum_height) {
         return l;
     }
-    const float cpu_budget = h - 2 * kMargin - static_cast<float>(plan.count) * kVerticalTail -
-                             static_cast<float>(plan.count - 1) * (22 + kWidgetGap);
-    auto fitted = squares ? fit_square_cpu(processors, cpu_budget, w - 18)
-                          : FittedCpu{plan.cpu, std::min((w - 18) / plan.cpu.band,
+    const int rows = (plan.count + plan.columns - 1) / plan.columns;
+    const float column_width = (w - 18 - static_cast<float>(plan.columns - 1) * plan.gap) /
+                               static_cast<float>(plan.columns);
+    const float usable_height = h - plan.group_overhead(0, rows, false, rows);
+    const float cpu_budget = usable_height - static_cast<float>(rows - 1) * 22;
+    auto fitted = squares ? fit_square_cpu(processors, cpu_budget, column_width)
+                          : FittedCpu{plan.cpu, std::min(column_width / plan.cpu.band,
                                                          cpu_budget / plan.cpu.preferred_width)};
     const float cpu_width = fitted.grid.band * fitted.factor;
     const float cpu_height = fitted.grid.preferred_width * fitted.factor;
-    const float device_height =
-        (h - 2 * kMargin - cpu_height - static_cast<float>(plan.count) * kVerticalTail -
-         static_cast<float>(plan.count - 1) * kWidgetGap) /
-        static_cast<float>(plan.count - 1);
-    float y = kMargin;
+    float device_height =
+        rows > 1 ? (usable_height - cpu_height) / static_cast<float>(rows - 1) : usable_height;
+    for (int first = rows; first < plan.count; first += rows) {
+        const int end = std::min(first + rows, plan.count);
+        const float other_height = (h - plan.group_overhead(first, end, false, end - first)) /
+                                   static_cast<float>(end - first);
+        device_height = std::min(device_height, other_height);
+    }
     std::size_t disk_index{};
-    for (auto kind : plan.kinds) {
+    float y = kMargin;
+    for (std::size_t i = 0; i < plan.kinds.size(); ++i) {
+        const auto kind = plan.kinds[i];
+        const int column = static_cast<int>(i) / rows, row = static_cast<int>(i) % rows;
         auto &b = l.blocks.emplace_back();
         b.kind = kind;
         b.disk = kind == 3 ? disk_index++ : 0;
-        const float gw = kind == 0 ? cpu_width : w - 18;
+        const float gw = kind == 0 ? cpu_width : column_width;
         const float gh = kind == 0 ? cpu_height : device_height;
-        const float x = 9 + alignment_offset(w - 18 - gw, alignment);
+        const float x = 9 + static_cast<float>(column) * (column_width + plan.gap) +
+                        alignment_offset(column_width - gw, alignment);
+        if (row == 0) {
+            y = kMargin;
+        }
+        const float readout = plan.readout_extent(static_cast<int>(i));
+        const float graphic_y = y + (edge == Edge::left ? readout : 0);
         // Transpose only meter geometry, keeping icons upright and below their group.
         place_block(b, 0, 0, gh, gw);
         for (auto &m : b.meters) {
             if (m.width > 0 && m.height > 0) {
-                m = {x + m.y, y, m.height, gh};
+                m = {x + m.y, graphic_y, m.height, gh};
             }
         }
-        b.graphic = {x, y, gw, gh};
-        b.icon = {x + (gw - kIcon) / 2, y + gh + kGraphicGap, kIcon, kIcon};
-        b.bounds = {x, y, gw, gh + kVerticalTail};
-        y += gh + kVerticalTail + kWidgetGap;
+        b.graphic = {x, graphic_y, gw, gh};
+        if (plan.readouts()) {
+            b.readout = {x, edge == Edge::left ? y : y + gh + kReadoutGap, gw,
+                         readout - kReadoutGap};
+        }
+        b.icon = {x + (gw - kIcon) / 2, y + gh + readout + kGraphicGap, kIcon, kIcon};
+        b.bounds = {x, y, gw, gh + plan.vertical_tail + readout};
+        y += b.bounds.height + plan.gap;
     }
     place_cpu(l, fitted.grid, fitted.grid.preferred_width, fitted.factor, edge, scale);
     for (auto &b : l.blocks) {
         scale_box(b.bounds, scale);
         scale_box(b.icon, scale);
         scale_box(b.graphic, scale);
+        scale_box(b.readout, scale);
         for (auto &m : b.meters) {
             scale_box(m, scale);
         }
@@ -415,58 +512,73 @@ Layout arrange(const LayoutPlan &plan, float width, float height, bool horizonta
     const float w = width / scale, h = height / scale;
     const int cols = plan.columns, count = plan.count;
     const bool single_row = cols == count;
-    const float graphics = w - 2 * kMargin - static_cast<float>(cols - 1) * kWidgetGap -
-                           (single_row ? kDividerExtra : 0.0F) - static_cast<float>(cols) * kHeader;
+    const float graphics = w - plan.group_overhead(0, cols, true, cols);
     const int rows = (count + cols - 1) / cols;
     const float available_band =
-        (h - 18 - static_cast<float>(rows - 1) * kWidgetGap) / static_cast<float>(rows);
+        plan.readouts()
+            ? h - 18 - static_cast<float>(rows - 1) * (22 + plan.gap)
+            : (h - 18 - static_cast<float>(rows - 1) * plan.gap) / static_cast<float>(rows);
     const float cpu_budget = graphics - static_cast<float>(cols - 1) * 48;
     auto fitted =
         squares ? fit_square_cpu(processors, cpu_budget, available_band) : FittedCpu{plan.cpu};
     const float cpu_width = std::min(fitted.grid.preferred_width * fitted.factor, cpu_budget);
     // All device meters share the remainder. With wrapped rows, also respect the
     // full device-only row; its free space follows the selected content alignment.
-    const float shared_width =
-        cols == 1 ? graphics : (graphics - cpu_width) / static_cast<float>(cols - 1);
-    const float g =
-        single_row ? shared_width : std::min(shared_width, graphics / static_cast<float>(cols));
+    float g = cols == 1 ? graphics : (graphics - cpu_width) / static_cast<float>(cols - 1);
+    for (int first = cols; first < count; first += cols) {
+        const int end = std::min(first + cols, count);
+        const int slots = plan.readouts() ? end - first : cols;
+        g = std::min(g, (w - plan.group_overhead(first, end, true, slots)) /
+                            static_cast<float>(slots));
+    }
     // Allow only floating-point rounding at an analytically calculated fit boundary.
     if (cpu_width + 0.0001F < fitted.grid.minimum_width * fitted.factor || g + 0.0001F < 48 ||
         h + 0.0001F < plan.minimum_height) {
         return l;
     }
     const float band = fitted.grid.band * fitted.factor;
-    const float used_height =
-        static_cast<float>(rows) * band + static_cast<float>(rows - 1) * kWidgetGap + 18;
+    // Only the CPU-containing row needs the wrapped CPU grid's height. Device-only
+    // rows keep their compact band, avoiding unnecessary AppBar thickness at large text scales.
+    const float other_band = plan.readouts() ? 22 : band;
+    const float used_height = band + static_cast<float>(rows - 1) * (other_band + plan.gap) + 18;
     l.blocks.resize(static_cast<std::size_t>(count));
     const float top = (h - used_height) / 2 + 9;
     std::size_t disk_index{};
+    float x{};
     for (int i = 0; i < count; ++i) {
         auto &b = l.blocks[static_cast<std::size_t>(i)];
         b.kind = plan.kinds[static_cast<std::size_t>(i)];
         b.disk = b.kind == 3 ? disk_index++ : 0;
         const int row = i / cols, col = i % cols;
         const int row_count = std::min(cols, count - row * cols);
-        const float row_width = static_cast<float>(row_count) * (g + kHeader) +
-                                static_cast<float>(row_count - 1) * kWidgetGap +
-                                (row == 0 ? cpu_width - g : 0) +
-                                (single_row ? kDividerExtra : 0.0F);
-        const float x = kMargin + static_cast<float>(col) * (g + kHeader + kWidgetGap) +
-                        (row == 0 && col > 0 ? cpu_width - g : 0) +
-                        (single_row && i > 0 ? kDividerExtra : 0.0F) +
-                        alignment_offset(w - 2 * kMargin - row_width, alignment);
-        place_block(b, x, top + static_cast<float>(row) * (band + kWidgetGap),
-                    i == 0 ? cpu_width : g, band);
+        if (col == 0) {
+            const float row_width = plan.group_overhead(i, i + row_count, true, row_count) -
+                                    2 * kMargin + static_cast<float>(row_count) * g +
+                                    (row == 0 ? cpu_width - g : 0);
+            x = kMargin + alignment_offset(w - 2 * kMargin - row_width, alignment);
+        }
+        const float y = row == 0 ? top
+                                 : top + band + plan.gap +
+                                       static_cast<float>(row - 1) * (other_band + plan.gap);
+        place_block(b, x, y, i == 0 ? cpu_width : g, row == 0 ? band : other_band);
+        if (plan.readouts()) {
+            const float readout = plan.readout_extent(i);
+            b.readout = {b.graphic.x + b.graphic.width + kReadoutGap, b.graphic.y,
+                         readout - kReadoutGap, b.graphic.height};
+            b.bounds.width += readout;
+        }
+        x += b.bounds.width + plan.gap + (single_row && i == 0 ? plan.gap + kDividerWidth : 0);
     }
     place_cpu(l, fitted.grid, cpu_width / fitted.factor, fitted.factor, edge, scale);
     if (single_row) {
-        l.divider = {l.blocks[0].bounds.x + cpu_width + kHeader + kWidgetGap, top + (band - 20) / 2,
-                     kDividerWidth, 20};
+        l.divider = {l.blocks[0].bounds.x + l.blocks[0].bounds.width + plan.gap,
+                     top + (band - 20) / 2, kDividerWidth, 20};
     }
     for (auto &b : l.blocks) {
         scale_box(b.bounds, scale);
         scale_box(b.icon, scale);
         scale_box(b.graphic, scale);
+        scale_box(b.readout, scale);
         for (auto &m : b.meters) {
             scale_box(m, scale);
         }
@@ -689,6 +801,7 @@ void snap_layout(Layout &layout, float dpi) {
         snap(b.bounds);
         snap(b.icon);
         snap(b.graphic);
+        snap(b.readout);
         if (temperature_aligned) {
             b.temperature.height = b.graphic.y + b.graphic.height - b.temperature.y;
         }
@@ -765,6 +878,9 @@ std::wstring metric_tooltip(const Layout &l, float x, float y, const Snapshot &s
         }
         if (byte_values) {
             result += L"\nMB/GB: Windows-style binary units (1024-based)";
+            if (settings.always_show_readout) {
+                result += L"\nReadout K/M/G/T/P/E: binary byte units; rates are per second";
+            }
         }
         if (settings.show_temperatures) {
             if (const auto *temperature = block_temperature(b, s)) {

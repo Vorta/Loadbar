@@ -418,7 +418,8 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             const int id = GetDlgCtrlID(message_pointer<HWND>(lparam));
             if ((id >= kFirstLabel && id <= kFirstLabel + 7) || id == kFooterStatus ||
                 id == kDrivesLabel || id == kCpuSquares || id == kHoverInfo ||
-                id == kTaskManagerClick || id == kTooltips || id == kTemperatures) {
+                id == kTaskManagerClick || id == kTooltips || id == kTemperatures ||
+                id == kAlwaysReadout) {
                 const auto dc = message_pointer<HDC>(wparam);
                 const auto color = IsWindowEnabled(message_pointer<HWND>(lparam)) ? COLOR_WINDOWTEXT
                                                                                   : COLOR_GRAYTEXT;
@@ -463,7 +464,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             return 0;
         }
         if (window == settings_window_ && lparam != 0 && command >= kCpuSquares &&
-            command <= kTemperatures) {
+            command <= kAlwaysReadout) {
             update_settings_actions();
             return 0;
         }
@@ -802,7 +803,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window_, 0};
             if (TrackMouseEvent(&tracking)) {
                 hovered_ = true;
-                if (settings_.show_hover_info) {
+                if (settings_.show_hover_info && !settings_.always_show_readout) {
                     InvalidateRect(window_, nullptr, FALSE);
                 }
                 schedule_refresh();
@@ -813,7 +814,7 @@ LRESULT Application::message(HWND window, UINT message_id, WPARAM wparam, LPARAM
     case WM_MOUSELEAVE:
         hovered_ = false;
         schedule_refresh();
-        if (settings_.show_hover_info) {
+        if (settings_.show_hover_info && !settings_.always_show_readout) {
             InvalidateRect(window_, nullptr, FALSE);
         }
         if (tooltip_) {

@@ -8,6 +8,9 @@
 #include <stdexcept>
 
 namespace {
+loadbar::Settings graphics_only() {
+    return {.always_show_readout = false};
+}
 void require(bool value, const char *message) {
     if (!value) {
         throw std::runtime_error(message);
@@ -20,7 +23,7 @@ bool near(float a, float b) {
 void visibility_layout_tests() {
     using namespace loadbar;
     for (unsigned mask = 0; mask < 4; ++mask) {
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         settings.gpu_id = L"remembered-gpu";
         settings.network_id = L"remembered-nic";
         settings.gpu_visible = (mask & 1U) != 0;
@@ -83,8 +86,8 @@ void visibility_layout_tests() {
                             minimum == 40 &&
                                 near(layout.cores.front().label.y, layout.cores.back().label.y),
                             "Four uniform cores use one row without increasing the minimum height");
-                        const auto original =
-                            make_layout(1400, thickness, loadbar::Edge::top, cpus, 1, {}, 2);
+                        const auto original = make_layout(1400, thickness, loadbar::Edge::top, cpus,
+                                                          1, graphics_only(), 2);
                         require(layout.blocks[1].graphic.width >= original.blocks[1].graphic.width,
                                 "Removing widgets redistributes freed width");
                     }
@@ -109,7 +112,7 @@ void visibility_layout_tests() {
     Snapshot snapshot;
     snapshot.gauges[1] = {70, Status::valid, Unit::percent, {}, {}, {}};
     snapshot.gauges[4] = {1024, Status::valid, Unit::bytes_per_second, {}, {}, {}};
-    Settings hidden;
+    Settings hidden{.always_show_readout = false};
     hidden.gpu_visible = hidden.network_visible = false;
     require(
         next_stale_deadline(snapshot, 1000).has_value() &&
@@ -165,7 +168,7 @@ void temperature_reference_layout_tests() {
           &snapshot.disks[0].temperature, &snapshot.disks[1].temperature}) {
         reading->metric = {64, Status::valid, Unit::celsius};
     }
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.cpu_squares = true;
     const auto reference = make_snapshot_layout(1200, 60, Edge::top, snapshot, 1, settings);
     require(reference.fits && reference.cores.size() == 24 && reference.blocks.size() == 6,
@@ -254,7 +257,7 @@ void temperature_visibility_layout_tests() {
         return near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) &&
                near(a.height, b.height);
     };
-    Settings disabled;
+    Settings disabled{.always_show_readout = false};
     disabled.show_temperatures = false;
     for (Edge edge : {Edge::top, Edge::bottom, Edge::left, Edge::right}) {
         const float width = horizontal(edge) ? 1400.0F : 60.0F;
@@ -263,7 +266,7 @@ void temperature_visibility_layout_tests() {
         auto absent = snapshot;
         absent.cpu_temperature = absent.ram_temperature = absent.gpu_temperature = {};
         absent.disks[0].temperature = {};
-        const auto original = make_snapshot_layout(width, height, edge, absent, 1, {});
+        const auto original = make_snapshot_layout(width, height, edge, absent, 1, graphics_only());
         require(hidden.fits && hidden.blocks.size() == original.blocks.size(),
                 "Temperature visibility does not affect widget allocation");
         for (std::size_t index = 0; index < hidden.blocks.size(); ++index) {
@@ -292,9 +295,9 @@ void content_width_tests() {
     for (unsigned i = 0; i < 8; ++i) {
         processors.push_back({{0, i}, i / 2, true, {}, 0});
     }
-    auto eight = make_layout(1400, 60, loadbar::Edge::top, processors, 1, {}, 2);
+    auto eight = make_layout(1400, 60, loadbar::Edge::top, processors, 1, graphics_only(), 2);
     processors.resize(4);
-    auto four = make_layout(1400, 60, loadbar::Edge::top, processors, 1, {}, 2);
+    auto four = make_layout(1400, 60, loadbar::Edge::top, processors, 1, graphics_only(), 2);
     require(four.fits && eight.fits &&
                 near(four.cores[0].label.width, eight.cores[0].label.width) &&
                 near(eight.blocks[0].graphic.width,
@@ -302,7 +305,7 @@ void content_width_tests() {
                 four.blocks[1].graphic.width > eight.blocks[1].graphic.width,
             "CPU width follows thread count; device meters receive the freed space");
     for (unsigned mask = 0; mask < 4; ++mask) {
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         settings.gpu_visible = (mask & 1U) != 0;
         settings.network_visible = (mask & 2U) != 0;
         for (auto alignment : {Alignment::start, Alignment::center, Alignment::end}) {
@@ -325,7 +328,8 @@ void content_width_tests() {
     }
     float previous{};
     for (float height : {40.0F, 60.0F, 120.0F, 320.0F, 640.0F}) {
-        const auto layout = make_layout(1400, height, loadbar::Edge::top, processors, 1, {}, 2);
+        const auto layout =
+            make_layout(1400, height, loadbar::Edge::top, processors, 1, graphics_only(), 2);
         require(layout.fits && layout.cores.front().label.width + 0.002F >= previous,
                 "Increasing thickness cannot shrink content-sized CPU tiles");
         previous = layout.cores.front().label.width;
@@ -339,10 +343,11 @@ void scaling_tests() {
     for (unsigned i = 0; i < 24; ++i) {
         hybrid.push_back({{0, i}, i, true, {}, i < 8 ? 1U : 0U});
     }
-    const auto base = make_layout(3840, 40, loadbar::Edge::top, hybrid, 1, {}, 2);
+    const auto base = make_layout(3840, 40, loadbar::Edge::top, hybrid, 1, graphics_only(), 2);
     require(base.fits && base.content_scale == 1, "Compact appearance stays at its baseline");
     for (float height : {40.0F, 80.0F, 120.0F, 80.0F, 40.0F}) {
-        const auto layout = make_layout(3840, height, loadbar::Edge::top, hybrid, 1, {}, 2);
+        const auto layout =
+            make_layout(3840, height, loadbar::Edge::top, hybrid, 1, graphics_only(), 2);
         const float scale = height / 40;
         require(layout.fits && near(layout.content_scale, scale) &&
                     near(layout.blocks[0].icon.height, (18 / 1.5F) * scale) &&
@@ -353,16 +358,17 @@ void scaling_tests() {
                     near(layout.blocks.back().meters[1].height, 6 * scale),
                 "Unconstrained thickness proportionally scales icons and every meter family");
     }
-    const auto capped = make_layout(1000, 200, loadbar::Edge::top, hybrid, 1, {}, 2);
-    const auto taller = make_layout(1000, 400, loadbar::Edge::top, hybrid, 1, {}, 2);
+    const auto capped = make_layout(1000, 200, loadbar::Edge::top, hybrid, 1, graphics_only(), 2);
+    const auto taller = make_layout(1000, 400, loadbar::Edge::top, hybrid, 1, graphics_only(), 2);
     require(capped.fits && taller.fits && capped.content_scale > 1 &&
                 near(capped.content_scale, taller.content_scale),
             "Width-constrained contents stop growing instead of adding rows");
-    const auto large_text = make_layout(3840, 180, loadbar::Edge::top, hybrid, 2.25F, {}, 2);
+    const auto large_text =
+        make_layout(3840, 180, loadbar::Edge::top, hybrid, 2.25F, graphics_only(), 2);
     require(large_text.fits && large_text.content_scale > 2.25F,
             "Combined content scale may exceed the Windows text-scale input limit");
-    require(!make_layout(3840, 180, loadbar::Edge::top, hybrid, 2.26F, {}, 2).fits &&
-                !make_layout(10, 40, loadbar::Edge::top, hybrid, 1, {}, 2).fits,
+    require(!make_layout(3840, 180, loadbar::Edge::top, hybrid, 2.26F, graphics_only(), 2).fits &&
+                !make_layout(10, 40, loadbar::Edge::top, hybrid, 1, graphics_only(), 2).fits,
             "Invalid text scale and compact layout failures remain explicit");
     std::vector<std::vector<Processor>> topologies{{}, hybrid};
     for (bool mixed : {false, true}) {
@@ -384,13 +390,13 @@ void scaling_tests() {
                 for (std::size_t disks : {0U, 2U, 4U}) {
                     const auto minimum = static_cast<float>(minimum_thickness(
                         length, 4096, (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
-                        processors, text_scale, {}, disks));
+                        processors, text_scale, graphics_only(), disks));
                     require(minimum <= 4096, "Test topology has a fitting compact layout");
                     const auto at = [&](float thickness) {
                         return make_layout(horizontal ? length : thickness,
                                            horizontal ? thickness : length,
                                            (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
-                                           processors, text_scale, {}, disks);
+                                           processors, text_scale, graphics_only(), disks);
                     };
                     const auto compact = at(minimum);
                     require(compact.fits && near(compact.content_scale, text_scale),
@@ -473,7 +479,7 @@ void scaling_tests() {
     }
     Snapshot snapshot;
     snapshot.processors = hybrid;
-    const auto enlarged = make_layout(3840, 120, loadbar::Edge::top, hybrid, 1);
+    const auto enlarged = make_layout(3840, 120, loadbar::Edge::top, hybrid, 1, graphics_only());
     const auto cell = enlarged.cores.front().label;
     require(metric_tooltip(enlarged, cell.x + cell.width / 2, cell.y + cell.height / 2, snapshot,
                            {}, {})
@@ -500,7 +506,7 @@ void edge_cpu_tests() {
         cpus.push_back({{i / 64, i % 64}, i / 2, true, {}, i < 32 ? 1U : 0U});
     }
     for (bool squares : {false, true}) {
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         settings.cpu_squares = squares;
         for (Edge edge : {Edge::left, Edge::right, Edge::top, Edge::bottom}) {
             const bool along_x = horizontal(edge);
@@ -561,7 +567,7 @@ void edge_cpu_tests() {
         for (auto &cpu : cpus) {
             cpu.efficiency_class = efficiency;
         }
-        Settings uniform_settings;
+        Settings uniform_settings{.always_show_readout = false};
         uniform_settings.cpu_squares = true;
         for (Edge edge : {Edge::left, Edge::right, Edge::top, Edge::bottom}) {
             const bool along_x = horizontal(edge);
@@ -586,7 +592,7 @@ void edge_cpu_tests() {
     for (unsigned i = 0; i < cpus.size(); ++i) {
         cpus[i].efficiency_class = i < 8 ? 1U : 0U;
     }
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     settings.cpu_squares = true;
     for (float thickness : {60.0F, 120.0F}) {
         for (Edge edge : {Edge::left, Edge::right}) {
@@ -594,15 +600,16 @@ void edge_cpu_tests() {
             require(layout.fits &&
                         near(layout.blocks[0].graphic.width, layout.blocks[1].graphic.width),
                     "Squares fill the usable vertical strip thickness");
-            const auto rectangular = make_layout(thickness, 1400, edge, cpus, 1, {}, 2);
+            const auto rectangular =
+                make_layout(thickness, 1400, edge, cpus, 1, graphics_only(), 2);
             require(layout.cores[0].label.width + 0.02F >= rectangular.cores[0].label.width &&
                         layout.blocks[0].graphic.height < rectangular.blocks[0].graphic.height &&
                         layout.blocks[1].graphic.height > rectangular.blocks[1].graphic.height,
                     "Square mode never shrinks cross-strip tiles and reallocates freed length");
         }
     }
-    require(!make_layout(1400, 60, Edge::automatic, cpus, 1).fits &&
-                !make_layout(1400, 60, static_cast<Edge>(99), cpus, 1).fits,
+    require(!make_layout(1400, 60, Edge::automatic, cpus, 1, graphics_only()).fits &&
+                !make_layout(1400, 60, static_cast<Edge>(99), cpus, 1, graphics_only()).fits,
             "Layout rejects unresolved or malformed edges");
 }
 } // namespace
@@ -615,7 +622,7 @@ void run_design_tests() {
         for (unsigned i = 0; i < 24; ++i) {
             cpus.push_back({{0, i}, i / 2, true, {}, i < 16 ? 1U : 0U});
         }
-        Settings settings;
+        Settings settings{.always_show_readout = false};
         settings.cpu_squares = true;
         for (bool horizontal : {false, true}) {
             for (float thickness : {60.0F, 120.0F, 240.0F}) {
@@ -691,10 +698,11 @@ void run_design_tests() {
         auto inventory = s;
         inventory.disks.resize(disks);
         for (float w : {506.0F, 618.0F, 1274.0F, 2560.0F}) {
-            const auto thickness = minimum_thickness(w, 480, loadbar::Edge::top, s.processors, 1,
-                                                     {}, disk_widget_count(inventory.disks, {}));
+            const auto thickness =
+                minimum_thickness(w, 480, loadbar::Edge::top, s.processors, 1, graphics_only(),
+                                  disk_widget_count(inventory.disks, {}));
             const auto l = make_snapshot_layout(w, static_cast<float>(thickness),
-                                                loadbar::Edge::top, inventory, 1, {});
+                                                loadbar::Edge::top, inventory, 1, graphics_only());
             require(l.fits && l.cores.size() == 24,
                     "Every logical processor fits after content-width reflow");
             require(l.blocks.size() == std::max(std::size_t{1}, disks) + 4,
@@ -724,12 +732,12 @@ void run_design_tests() {
             const float length = horizontal ? 540.0F : 1080.0F;
             const auto thickness = minimum_thickness(
                 length, 480, (horizontal ? loadbar::Edge::top : loadbar::Edge::right), s.processors,
-                scale, {}, 2);
+                scale, graphics_only(), 2);
             require(thickness <= 480, "Two-disk layout reflows at text scale");
             const auto l = make_layout(horizontal ? length : static_cast<float>(thickness),
                                        horizontal ? static_cast<float>(thickness) : length,
                                        (horizontal ? loadbar::Edge::top : loadbar::Edge::right),
-                                       s.processors, scale, {}, 2);
+                                       s.processors, scale, graphics_only(), 2);
             require(l.fits && l.cores.size() == 24, "Reflow retains all core cells");
             for (const auto &b : l.blocks) {
                 require(b.graphic.width >= (b.kind == 0  ? 6.0F
@@ -741,7 +749,7 @@ void run_design_tests() {
             }
         }
     }
-    Settings settings;
+    Settings settings{.always_show_readout = false};
     auto wide = make_layout(1920, 40, loadbar::Edge::top, s.processors, 1, settings, 2);
     require(wide.fits && near(wide.blocks[0].graphic.width, 190) &&
                 wide.blocks[1].graphic.width > 240,
@@ -787,7 +795,7 @@ void run_design_tests() {
             "Legacy percent converts once using monitor/DPI then applies the 40-DIP minimum");
     require(migrate_thickness(*legacy, {0, 0, 1080, 1920}, 192) && legacy->thickness == 40,
             "DIP thickness survives rotation and DPI change");
-    require(encode_settings(*legacy).starts_with(L"Loadbar 12 ") &&
+    require(encode_settings(*legacy).starts_with(L"Loadbar 13 ") &&
                 decode_settings(encode_settings(*legacy)) == legacy,
             "DIP-only schema persists migration");
     require(!decode_settings(
@@ -796,7 +804,8 @@ void run_design_tests() {
     Snapshot smt;
     smt.processors = {{{0, 0}, 0, true, {20, Status::valid, Unit::percent, {}, {}, {}}},
                       {{0, 1}, 0, true, {80, Status::valid, Unit::percent, {}, {}, {}}}};
-    const auto smt_layout = make_layout(1920, 40, loadbar::Edge::top, smt.processors, 1);
+    const auto smt_layout =
+        make_layout(1920, 40, loadbar::Edge::top, smt.processors, 1, graphics_only());
     require(smt_layout.cores.size() == 2 && smt_layout.cores[0].processor == 0 &&
                 smt_layout.cores[1].processor == 1 &&
                 core_metric(smt_layout.cores[0], smt, {}, 1000).value == 20 &&

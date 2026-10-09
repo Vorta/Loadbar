@@ -161,6 +161,7 @@ bool Renderer::invalidate_changes(HWND window, const Snapshot &previous, const S
     if (!target_ || !layout_.fits || topology_changed || disk_layout_changed(next, settings) ||
         temperature_layout_changed(next, settings.show_temperatures) ||
         layout_cpu_squares_ != settings.cpu_squares ||
+        layout_always_readout_ != settings.always_show_readout ||
         layout_gpu_memory_ != gpu_memory_visible(next) ||
         layout_gpu_visible_ != settings.gpu_visible ||
         layout_network_visible_ != settings.network_visible ||
@@ -241,6 +242,7 @@ void Renderer::preferences_changed() noexcept {
     }
     text_cache_.clear();
     temperature_cache_.clear();
+    readout_cache_.clear();
 }
 void Renderer::discard() noexcept {
     ++layout_revision_;
@@ -302,6 +304,7 @@ HRESULT Renderer::prepare(ID2D1RenderTarget *target, float scale, float temperat
         fonts_ = std::move(fonts);
         text_cache_.clear();
         temperature_cache_.clear();
+        readout_cache_.clear();
         content_scale_ = scale;
         temperature_size_ = temperature_size;
     }
@@ -522,10 +525,18 @@ IDWriteTextLayout *Renderer::text_layout(TextCache &c, const std::wstring &text,
         Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
         checked(write_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
                                          fonts_[font].Get(), width, height, &layout));
+        DWRITE_TEXT_METRICS metrics{};
+        checked(layout->GetMetrics(&metrics));
+        c.advance = metrics.width;
+        if (font < 2) {
+            // CPU hover and component readouts are single-line, no-wrap layouts.
+            DWRITE_LINE_METRICS line{};
+            UINT32 count{};
+            checked(layout->GetLineMetrics(&line, 1, &count));
+            c.baseline = metrics.top + line.baseline;
+        }
         if (font == 4) {
-            DWRITE_TEXT_METRICS metrics{};
             DWRITE_OVERHANG_METRICS overhang{};
-            checked(layout->GetMetrics(&metrics));
             checked(layout->GetOverhangMetrics(&overhang));
             c.temperature_x = (width - metrics.width) / 2;
             // Negative overhang is whitespace inside the layout box. Translate
@@ -535,6 +546,37 @@ IDWriteTextLayout *Renderer::text_layout(TextCache &c, const std::wstring &text,
         c.layout = std::move(layout);
     }
     return c.layout.Get();
+}
+void Renderer::readout(std::size_t block, const Snapshot &s, const Settings &settings,
+                       Clock::time_point now) {
+    const auto &component = layout_.blocks[block];
+    auto box = component.readout;
+    const OverlayTransform transform(drawing_.Get(), box, layout_edge_);
+    if (!horizontal(layout_edge_)) {
+        box = {0, 0, box.height, box.width};
+    }
+    const auto values = component_readout(component.kind, component.disk, s, settings, now);
+    auto &cache = readout_cache_[block];
+    const float line_height = 11 * content_scale_;
+    const float top = box.y + (box.height - strip_style::kReadoutBand * content_scale_) / 2;
+    const auto draw = [&](const ReadoutPart &part, std::size_t slot, float x, float y,
+                          unsigned font) {
+        if (part.text.empty()) {
+            return 0.0F;
+        }
+        // The column clip owns the final bounds. A stable layout width prevents a
+        // changing memory/read value from recreating the following decode/write text.
+        auto *text = text_layout(cache[slot], part.text, box.width, line_height, font);
+        brush_->SetColor(native(high_contrast_ ? foreground_ : part.color));
+        drawing_->DrawTextLayout({x, y - cache[slot].baseline}, text, brush_.Get(),
+                                 D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        return cache[slot].advance;
+    };
+    draw(values.primary, 0, box.x, top + strip_style::kReadoutPrimaryBaseline * content_scale_, 0);
+    const float secondary_y = top + strip_style::kReadoutSecondaryBaseline * content_scale_;
+    const auto advance = draw(values.secondary[0], 1, box.x, secondary_y, 1);
+    draw(values.secondary[1], 2, box.x + advance + (advance > 0 ? 5.4F * content_scale_ : 0),
+         secondary_y, 1);
 }
 void Renderer::overlay(std::size_t block, const Snapshot &s, const Settings &settings,
                        Clock::time_point now) {
@@ -673,6 +715,7 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             scale != layout_scale_ || current_dpi != layout_dpi_ || edge != layout_edge_ ||
             settings.alignment != layout_alignment_ ||
             settings.cpu_squares != layout_cpu_squares_ ||
+            settings.always_show_readout != layout_always_readout_ ||
             gpu_memory_visible(snapshot) != layout_gpu_memory_ ||
             settings.gpu_visible != layout_gpu_visible_ ||
             settings.network_visible != layout_network_visible_) {
@@ -700,9 +743,11 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
             layout_gpu_memory_ = gpu_memory_visible(snapshot);
             layout_network_visible_ = settings.network_visible;
             layout_show_temperatures_ = settings.show_temperatures;
+            layout_always_readout_ = settings.always_show_readout;
             glows_.clear();
             text_cache_.clear();
             temperature_cache_.clear();
+            readout_cache_.clear();
             ++layout_revision_;
         }
         checked(prepare(target, layout_.fits ? layout_.content_scale : scale,
@@ -719,6 +764,9 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
         } else {
             core_readings_.resize(layout_.cores.size());
             block_readings_.resize(layout_.blocks.size());
+            if (settings.always_show_readout) {
+                readout_cache_.resize(layout_.blocks.size());
+            }
             if (settings.show_temperatures) {
                 temperature_cache_.resize(layout_.blocks.size());
             }
@@ -843,7 +891,9 @@ HRESULT Renderer::render_to(ID2D1RenderTarget *target, const Snapshot &snapshot,
                     color.a = 0.4F;
                 }
                 draw_icon(block.kind, block.icon, color);
-                if (hover && settings.show_hover_info) {
+                if (settings.always_show_readout) {
+                    readout(index, snapshot, settings, now);
+                } else if (hover && settings.show_hover_info) {
                     overlay(index, snapshot, settings, now);
                 }
             }

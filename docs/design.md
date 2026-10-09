@@ -2,11 +2,13 @@
 
 Loadbar uses a graphics-first layout with an opaque background, outlined device icons,
 rounded meter tracks and static high-use glows. Embedded Geist Mono supplies bar text;
-native controls keep their Windows font. Utilization/rate numbers appear only on hover; native tooltips and Settings
-provide complete readings when inline text cannot fit. **Show info on hover** controls inline
-numbers, and **Show tooltips** independently controls the native bar popup. Both are enabled by
-default; Settings readings and the tray tooltip remain available. Popup byte quantities and rates
-use compact MB/GB and MB/s/GB/s with one decimal and explicitly binary units.
+native controls keep their Windows font. **Always show readout** is enabled by default in
+1.3.0, including upgrades, and places a two-line numeric column after every graphic. With it
+disabled, **Show info on hover** controls the original inline overlays. That checkbox is
+disabled while readouts are on, without erasing its choice. Native tooltips and Settings
+provide complete readings. **Show tooltips** independently controls the native bar popup.
+Hover info and tooltips are enabled by default; Settings readings and the tray tooltip remain
+available. Popup byte quantities and rates use compact MB/GB and MB/s/GB/s with one decimal and explicitly binary units.
 
 ## Layout and scaling
 
@@ -137,3 +139,45 @@ values, resource failures and recovery, and resize equivalence. Fixtures under
 `out/build/<preset>/render-fixtures/` are synthetic test artifacts. Live hover timing,
 accessibility, Shell geometry and real GPU target loss remain manual checks in
 [testing.md](testing.md). README media is documented separately in [animation.md](animation.md).
+
+## Always-visible readouts (1.3.0)
+
+The [supplied reference](media/loadbar-always-readout.png) defines the two-line composition.
+CPU shows the logical-processor-weighted mean and, for completely classified hybrid CPUs,
+P/E means using the same highest-class/rest grouping as the existing CPU hover summary.
+Uniform or unknown classes omit that second line; incomplete displayed CPU inputs show an
+unavailable total. Logical-processor tiles remain independent and complete.
+RAM shows percentage plus used/total capacity. GPU shows 3D plus selected memory bytes and
+▶decode percentage; never-observed memory leaves only decode on the second line. Each drive
+shows active percentage plus R/W rates. Network shows ↓download then ↑upload. Component
+palettes color the text; high contrast uses system foreground. Readouts obey existing
+warm-up and last-valid continuity and never influence collection or session peaks.
+
+Readout widths in compact DIPs are CPU 52 for classified hybrid topology or 30 otherwise,
+RAM 56, GPU 62, disk 72 and network 42. Each follows its graphic with a 6-DIP gap. Widths
+cover the maximum formatted text rather than the current reading, so values never move
+widgets. Readout-mode widget spacing is 8 DIPs at the 60-DIP reference scale, including
+either side of the CPU divider. Remaining space goes to equally sized non-CPU graphics;
+minimum sizing and wrapped rows/columns use the actual component budgets.
+
+Geist Mono uses 11/9-compact-DIP Medium/Regular text. Shared baselines at 9/20 compact DIPs
+within a centered 22-DIP band replace independent text-box centering. Baseline offsets come
+from [DirectWrite line metrics](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/ns-dwrite-dwrite_line_metrics)
+and are cached with each text layout. Font size and spacing follow graphic magnification and
+Windows text scale. Vertical groups retain temperature clearance inside their allocation;
+wrapped columns reserve at least 28 compact DIPs so upright thermal labels cannot overlap.
+The original graphics-only spacing remains unchanged.
+Compact values use binary B/K/M/G/T/P/E, with rate suffixes implying bytes per second;
+capacities share their denominator's unit. Rates have at most one decimal, with whole
+numbers at 100 and above; zero stays zero and tiny positive values use <0.1. Tooltips
+explain the convention and retain full device identity, scope, statuses and observation age.
+
+Horizontal columns follow each graphic. Right-edge columns follow below it and rotate
+top-down; Left-edge columns precede it spatially so bottom-up reading encounters the
+readout after the graphic. Icons and temperatures stay upright beneath each complete group.
+Short vertical edges reflow into additional widget columns through the same minimum-size
+negotiation. In wrapped horizontal layouts, device-only rows use the compact graphic band
+rather than inheriting a taller CPU grid. Every non-CPU graphic retains the same length. Applying the setting reflows
+without restarting providers. Cached readout layouts are independent of temperatures and
+hover overlays; unchanged text survives hover transitions. The [README animations](animation.md)
+compare both modes at matching dimensions and graphic scale, with temperatures enabled.

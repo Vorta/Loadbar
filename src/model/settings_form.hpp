@@ -13,6 +13,7 @@ struct SettingsDraft {
     bool gpu_visible{true}, network_visible{true};
     bool cpu_squares{};
     bool show_temperatures{true};
+    bool always_show_readout{true};
     bool show_hover_info{true}, show_tooltips{true}, open_task_manager_on_click{true};
     HiddenDiskIds hidden_disks;
 };
@@ -36,7 +37,7 @@ struct SettingsLayout {
     std::array<ControlBounds, 7> labels, fields;
     // Apply, Cancel, Retry, Exit Loadbar, Close Settings.
     std::array<ControlBounds, 5> buttons;
-    std::array<ControlBounds, 5> preferences;
+    std::array<ControlBounds, 6> preferences;
     ControlBounds footer_status, readings_label, readings, drives_label, drives;
     int content_height{}, scroll{}, metric_width{};
     bool scroll_footer{};
