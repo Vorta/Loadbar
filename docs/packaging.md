@@ -1,5 +1,31 @@
 # Packaging and release evidence
 
+## 1.3.1 release artifact
+
+Built on 2026-10-10 in the isolated `out/release-source-1.3.1` checkout with
+`pwsh -NoProfile -File scripts/package-release.ps1`. Release configure/build and all four
+CTest suites passed (6.15 s). The executable is 1,383,936 bytes and reports product/file
+version 1.3.1 and author Vorta. The package script verified that the ZIP contains only the
+same executable, byte-for-byte. PDBs and research diagnostics are not shipped.
+The three assets were copied to the primary workspace's `out/release/1.3.1/` and their hashes
+compared with the tested checkout's files.
+
+| Asset | SHA-256 |
+| --- | --- |
+| Loadbar.exe | `97e78dd446a76fab838a3aadac2ec4518fe66b4fbe25bb4e2e516f22569dd4c5` |
+| Loadbar-1.3.1-windows-x64.zip | `25ef10e31f2ad0b644658825be4f70bd60c4e9bb3d13a58c51d619d139556ab1` |
+
+`dumpbin /dependents` lists only Windows components, with no application/CRT/ASan DLL import.
+`dumpbin /headers` confirms x64 GUI, CFG, ASLR, DEP, high-entropy VA and an empty delay-import
+directory. Release commands retain `/O2`, static `/MT` and the named C++23-preview mode.
+The dynamic-load audit finds only the unchanged System32-restricted installed-driver loader.
+Logs are `out/v131-{package,dependents,headers}.log` within the isolated checkout.
+
+The owner explicitly requested this wording-only patch release after the existing validation
+gaps were disclosed. No additional thermal provider is included. The running AppBar was not
+restarted or changed; clean-machine execution and the full interactive/performance/hardware
+gates remain pending. See [testing](testing.md) and [release notes](releases/1.3.1.md).
+
 ## 1.3.0 release artifact
 
 The final `out/build/windows-x64-release/Loadbar.exe` built on 2026-10-09 reports file/product

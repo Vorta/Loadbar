@@ -1,5 +1,43 @@
 # Testing and verification
 
+## CPU temperature availability wording (1.3.1)
+
+On 2026-10-10, the interface-open failure and initial CPU temperature detail were changed to
+`CPU temperature is not available`. The native error code and unavailable/error classification
+are preserved. Regression coverage checks the missing-interface message and initial snapshot.
+Provider access, sampling and rendering behavior are unchanged.
+
+Verification used an isolated checkout at `out/release-source-1.3.1`, containing only this
+patch, its version bump and release documentation. The local thermal-interface research and
+optional diagnostic were excluded. From that checkout, using the pinned developer shell:
+
+```powershell
+pwsh -NoProfile -File scripts/package-release.ps1
+. ./scripts/enter-dev-shell.ps1
+foreach ($preset in @('windows-x64-debug', 'windows-x64-asan')) {
+    cmake --preset $preset
+    cmake --build --preset $preset
+    ctest --preset $preset --output-on-failure
+}
+cmake --build --preset windows-x64-release --target format-check
+cmake --build --preset windows-x64-release --target tidy
+cmake --build --preset windows-x64-release --target analyze
+dumpbin /dependents out/release/1.3.1/Loadbar.exe
+dumpbin /headers out/release/1.3.1/Loadbar.exe
+git -c core.safecrlf=false diff --check
+```
+
+Release packaging configured, built and passed all four CTest suites in 6.15 seconds.
+Debug and ASan configure/builds passed 4/4 suites in 13.52 and 32.40 seconds respectively.
+Format-check, the full clang-tidy scan and MSVC analysis passed. Logs remain under the
+checkout's ignored `out/v131-*.log` paths.
+Resource checks verified the embedded 1.3.1 version; archive and dependency evidence is in
+[packaging.md](packaging.md#131-release-artifact).
+
+The running application was not replaced or restarted. Live presentation of the wording,
+the full interactive matrix, hardware accuracy, controlled performance/soak and clean-machine
+execution remain pending. Existing 1.3.0 measurements are not measurements of this binary.
+
 ## Always-visible readouts (1.3.0)
 
 On 2026-10-09, after the typography/spacing correction, Debug, Release, RelWithDebInfo and

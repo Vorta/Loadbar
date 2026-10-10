@@ -151,8 +151,14 @@ void asus_tests() {
     missing = true;
     AsusTemperature absent(io);
     const auto previous_opens = opens;
-    check(absent.sample(start, 1000).metric.status == Status::unavailable,
+    const auto &unavailable = absent.sample(start, 1000).metric;
+    check(unavailable.status == Status::unavailable,
           "Absent ASUS driver is unavailable without elevation");
+    check(unavailable.detail ==
+              error_text({L"CPU temperature is not available", ERROR_FILE_NOT_FOUND}),
+          "Missing CPU interface uses generic wording and preserves the native error");
+    check(Snapshot{}.cpu_temperature.metric.detail == L"CPU temperature is not available",
+          "Initial CPU temperature availability message is vendor-neutral");
     static_cast<void>(absent.sample(at(1), 1000));
     check(opens == previous_opens + 1, "ASUS absent interface backoff");
 }

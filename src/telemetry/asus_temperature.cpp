@@ -156,7 +156,7 @@ const TemperatureReading &AsusTemperature::sample(Clock::time_point now, unsigne
         s.handle.reset(s.io.open());
         if (!s.handle) {
             const auto code = GetLastError();
-            s.reading = cpu_failure(now, L"Open ASUS CPU temperature interface", code);
+            s.reading = cpu_failure(now, L"CPU temperature is not available", code);
             s.failures = std::min(s.failures + 1, 5U);
             s.schedule(now, interval);
             return s.reading;

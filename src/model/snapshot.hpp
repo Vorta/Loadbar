@@ -98,12 +98,7 @@ struct Snapshot {
     Metric ram_used_bytes{0, Status::unavailable, Unit::bytes, {}, {}, {}};
     std::uint64_t ram_total_bytes{};
     TemperatureReading cpu_temperature{
-        {0,
-         Status::unavailable,
-         Unit::celsius,
-         {},
-         {},
-         L"CPU temperature awaiting an available ASUS firmware interface"}};
+        {0, Status::unavailable, Unit::celsius, {}, {}, L"CPU temperature is not available"}};
     TemperatureReading ram_temperature{
         {0,
          Status::unavailable,
